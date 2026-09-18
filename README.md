@@ -29,7 +29,7 @@ archive under one tag comes from one commit.
 The builtins lie where clang looks for them: `lib/clang/23/lib/<triple>/` for the two
 musl and the two MSVC targets, and one universal `lib/clang/23/lib/darwin/libclang_rt.osx.a`
 for both macOS processors. The musl targets also get `clang_rt.crtbegin.o` and
-`clang_rt.crtend.o`. On Linux, clang compiles for glibc by default and for musl with
+`clang_rt.crtend.o`, and macOS gets the runtimes of ASan and UBSan. On Linux, clang compiles for glibc by default and for musl with
 `--target`. There is no `clang++`, because nothing Anti ships is C++.
 
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
