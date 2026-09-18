@@ -1,13 +1,15 @@
 # llvm-tools
 
-The five LLVM tools that Anti ships, built for every host from the pinned LLVM source:
-`llvm-mc`, `lld`, `llvm-ar`, `llvm-objdump` and `llvm-readobj`. The compiler is clang
-of the pinned LLVM release. Each host gets one archive, published as an asset of a
-GitHub release. `antic` downloads the archive of its host and nothing else from LLVM.
+The five LLVM tools that Anti ships, `llvm-mc`, `lld`, `llvm-ar`, `llvm-objdump` and
+`llvm-readobj`, and the clang that builds Anti, for every host from the pinned LLVM
+source. The compiler that builds them is clang of the pinned LLVM release. Each host
+gets two archives, published as assets of a GitHub release: the tools, and clang with
+its built-in headers and the compiler-rt builtins of all six targets. `antic` downloads
+the archives of its host and nothing else from LLVM.
 
 ## Releases
 
-A release tag is `<version>-anti.<build>`, as in `23.1.1-anti.1`: the LLVM version,
+A release tag is `<version>-anti.<build>`, as in `23.1.1-anti.2`: the LLVM version,
 whose build it is, and a counter of the rebuilds of that version. A rebuild of the same
 LLVM version with a changed recipe takes the next build number in `pins/build-number`.
 An archive under a published tag is never replaced.
@@ -17,17 +19,24 @@ Each release holds these files.
 | File | Contents |
 |---|---|
 | `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the five tools, `licenses/`, `VERSION` |
+| `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers and the builtins, `licenses/`, `VERSION` |
 | `SHA256SUMS` | The SHA-256 digest of each archive |
 | `SHA256SUMS.sig` | An ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS` |
 
-`VERSION` names the LLVM version, the build number and the commit of the recipe.
+`VERSION` names the LLVM version, the build number and the commit of the recipe. Every
+archive under one tag comes from one commit.
+
+The builtins lie where clang looks for them: `lib/clang/23/lib/<triple>/` for the two
+musl and the two MSVC targets, and one universal `lib/clang/23/lib/darwin/libclang_rt.osx.a`
+for both macOS processors. The musl targets also get `clang_rt.crtbegin.o` and
+`clang_rt.crtend.o`. On Linux, clang compiles for glibc by default and for musl with
+`--target`. There is no `clang++`, because nothing Anti ships is C++.
 
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
-`windows-x86_64` and `windows-arm64`. `antic` supports five of them. The
-`macos-x86_64` archive is built and published, and no installer or package of `antic`
-downloads it. The Linux tools link musl, libc++ and zlib
-statically and name no shared library. The macOS tools name `libSystem` and `libc++`
-of the system. The Windows tools link the CRT statically and import system DLLs
+`windows-x86_64` and `windows-arm64`. The Linux binaries link musl, libc++ and zlib
+statically and name no shared library. The macOS binaries name `libSystem` and `libc++`
+of the system and record macOS 11.0 as their `minos`. The Windows binaries link the CRT
+statically and import system DLLs
 alone.
 
 ## Signing key
@@ -40,10 +49,6 @@ digest of the public key in DER form is its fingerprint:
 ```text
 7e64c56e26a42946823a66aa1f30bf686b6b5dbd0dc0e2c165a080540ffc3eca
 ```
-
-https://anti-lang.com/keys/release.asc serves a copy of the same PEM file until the
-next release is out. That address held the GPG key of the first release, and the copy
-goes away with the next release.
 
 openssl checks a download, and macOS, Linux and Git for Windows carry it. The first
 command prints the fingerprint above.
@@ -67,8 +72,8 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | `pins/sysroot.toml` | The musl packages, the macOS SDK and the xwin versions |
 | `pins/zlib.toml` | The zlib source |
 | `pins/build-number` | The build number of the next release |
-| `scripts/build.sh` | Runs the recipe for one host on this machine |
-| `scripts/pack.sh` | Packs the tools of one host with the licences |
+| `scripts/build.sh` | Runs the recipe for one host, or for the builtins, on this machine |
+| `scripts/pack.sh` | Packs the tools and clang of one host with the licences |
 | `scripts/release.sh` | Tags, signs and uploads a release |
 | `scripts/run-remote.sh` | Runs a tool of another system over ssh, for the version check |
 | `scripts/common.sh` | The TOML readers and names that the scripts share |
@@ -92,6 +97,7 @@ options to ssh and scp.
 
 ```sh
 export LINUX_REMOTE=eddie@192.168.60.131 WINDOWS_REMOTE=eddie@192.168.60.132
+ACCEPT_LICENSE=yes scripts/build.sh builtins
 scripts/build.sh macos-arm64
 scripts/build.sh macos-x86_64
 scripts/build.sh linux-x86_64

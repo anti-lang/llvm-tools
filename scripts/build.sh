@@ -2,6 +2,10 @@
 # Run the recipe for one host on this machine.
 #
 #   scripts/build.sh <host>
+#   scripts/build.sh builtins
+#
+# builtins builds the compiler-rt builtins of the six targets, which every
+# clang archive carries.
 #
 # The recipe runs every tool for its version check. A tool of another
 # system runs over ssh on the machine in LINUX_REMOTE or WINDOWS_REMOTE,
@@ -9,11 +13,14 @@
 # yes to pass it to the recipe of a Windows host.
 . "$(dirname "$0")/common.sh"
 
-[ "$#" -eq 1 ] || die "usage: scripts/build.sh <host>"
+[ "$#" -eq 1 ] || die "usage: scripts/build.sh <host> | builtins"
 host=$1
-require_host "$host"
-
-set -- -DHOST="$host"
+if [ "$host" = builtins ]; then
+    set -- -DSTEP=builtins
+else
+    require_host "$host"
+    set -- -DHOST="$host"
+fi
 case $host in
     linux-*) remote=${LINUX_REMOTE:-} ;;
     windows-*) remote=${WINDOWS_REMOTE:-} ;;

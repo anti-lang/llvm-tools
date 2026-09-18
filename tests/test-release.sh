@@ -1,8 +1,8 @@
 #!/bin/sh
 # scripts/release.sh tags the recipe commit, signs SHA256SUMS with openssl
-# and uploads the six archives, and never replaces a published one. gh is a
-# stand-in, origin is a bare repository on disk, and a key made here stands
-# in for the release key.
+# and uploads the twelve archives, the tools and clang of six hosts. It
+# never replaces a published one. gh is a stand-in, origin is a bare
+# repository on disk, and a key made here stands in for the release key.
 . "$(dirname "$0")/lib.sh"
 
 copy=$(checkout_copy)
@@ -29,15 +29,17 @@ sign_elsewhere() {
         -out "$dist/SHA256SUMS.sig"
 }
 
-# Write the six archives, each with a VERSION that names commit $1.
+# Write the twelve archives, each with a VERSION that names commit $1.
 fake_archives() {
     rm -rf "$dist"
     mkdir -p "$dist" "$work/stage"
     printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" "$1" \
         > "$work/stage/VERSION"
-    for host in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64 \
-                windows-x86_64 windows-arm64; do
-        tar -cJf "$dist/llvm-tools-$tag-$host.tar.xz" -C "$work/stage" VERSION
+    for kind in llvm-tools clang; do
+        for host in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64 \
+                    windows-x86_64 windows-arm64; do
+            tar -cJf "$dist/$kind-$tag-$host.tar.xz" -C "$work/stage" VERSION
+        done
     done
 }
 
@@ -90,7 +92,7 @@ expect_refusal "does not verify" release
 sign_elsewhere "$work/test-key.pem"
 release >/dev/null
 sums="$dist/SHA256SUMS"
-[ "$(wc -l < "$sums" | tr -d ' ')" = 6 ] || fail "SHA256SUMS: $(cat "$sums")"
+[ "$(wc -l < "$sums" | tr -d ' ')" = 12 ] || fail "SHA256SUMS: $(cat "$sums")"
 (cd "$dist" && shasum -a 256 -c SHA256SUMS >/dev/null) ||
     fail "SHA256SUMS does not match the archives"
 [ "$(sort "$sums")" = "$(cat "$sums")" ] || fail "SHA256SUMS is not sorted"
@@ -103,7 +105,8 @@ openssl pkeyutl -verify -pubin -inkey "$copy/keys/release.pem" \
 create=$(grep '^release create' "$work/gh.log") ||
     fail "gh release create was not called"
 for file in SHA256SUMS SHA256SUMS.sig llvm-tools-$tag-linux-x86_64.tar.xz \
-            llvm-tools-$tag-windows-arm64.tar.xz; do
+            llvm-tools-$tag-windows-arm64.tar.xz clang-$tag-macos-x86_64.tar.xz \
+            clang-$tag-windows-arm64.tar.xz; do
     case $create in
         *"$dist/$file"*) ;;
         *) fail "gh release create did not upload $file: $create" ;;
@@ -141,8 +144,11 @@ printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" \
 tar -cJf "$dist/llvm-tools-$tag-linux-arm64.tar.xz" -C "$work/stage" VERSION
 expect_refusal "commit" signed_release
 
-# A missing archive is refused.
+# A missing archive of either kind is refused.
 fake_archives "$commit"
 rm "$dist/llvm-tools-$tag-macos-x86_64.tar.xz"
-expect_refusal "macos-x86_64" signed_release
+expect_refusal "llvm-tools-$tag-macos-x86_64" signed_release
+fake_archives "$commit"
+rm "$dist/clang-$tag-linux-arm64.tar.xz"
+expect_refusal "clang-$tag-linux-arm64" signed_release
 finished=yes

@@ -1,27 +1,34 @@
-# Build the five LLVM tools of one host from the pinned LLVM source.
+# Build the five LLVM tools and clang of one host from the pinned LLVM
+# source, or the compiler-rt builtins of all six targets.
 #
 #   cmake -DHOST=<host> [-DRUNNER=<command>] [-DACCEPT_LICENSE=yes] \
 #         -P build-llvm.cmake
+#   cmake -DSTEP=builtins [-DACCEPT_LICENSE=yes] -P build-llvm.cmake
 #
 # HOST names a table of hosts.toml. The compiler is clang of the LLVM
 # release that pins/release.toml names for this machine. The recipe checks
 # the digest and the Sigstore attestation of that archive and the digest of
-# the source, builds lld, llvm-mc, llvm-ar, llvm-objdump and llvm-readobj
-# into build/<host>/llvm/bin, and refuses a tool that names a shared library
-# outside the system set of its host or reports another version. It then
+# the source. It builds lld, llvm-mc, llvm-ar, llvm-objdump, llvm-readobj
+# and clang into build/<host>/llvm/bin, with the built-in headers of clang
+# beside them. It refuses a binary that names a shared library outside the
+# system set of its host, and one that reports another version. It then
 # writes build/<host>/recipe, which scripts/pack.sh reads.
 #
-# RUNNER is a command that runs a tool of another operating system, as
-# "docker;run;..." for Linux. ACCEPT_LICENSE=yes lets xwin download the
-# Microsoft CRT and Windows SDK for a Windows host.
+# STEP=builtins builds the compiler-rt builtins of the six targets into
+# build/builtins, which every clang archive carries, and writes
+# build/builtins/recipe.
+#
+# RUNNER is a command that runs a binary of another operating system.
+# ACCEPT_LICENSE=yes lets xwin download the Microsoft CRT and Windows SDK
+# for a Windows host.
 #
 # STEP runs one part alone. The tests and the scripts use it.
-#   hosts, tools            print the hosts or the tools of hosts.toml
+#   hosts, tools, compiler  print the hosts, the tools or the compiler
 #   host-info, get          print the fields of HOST, or KEY of HOST
 #   paths                   print the paths of HOST that other files read
 #   fetch-file              download URL to FILE and check SHA256
-#   check-libraries         check the shared libraries of the tools in BIN
-#   check-version           check the version the tools in BIN report
+#   check-libraries         check the shared libraries of the binaries in BIN
+#   check-version           check the version the binaries in BIN report
 cmake_minimum_required(VERSION 3.25)
 
 # DESIGN: every path of the build tree is defined here once. The scripts
@@ -32,6 +39,9 @@ set(downloads "${build_root}/downloads")
 set(release_root "${build_root}/release")
 set(source_root "${build_root}/source")
 set(sysroot_root "${build_root}/sysroot")
+set(builtins_root "${build_root}/builtins")
+set(builtins_install "${builtins_root}/install")
+set(builtins_stamp "${builtins_root}/recipe")
 set(dist "${build_root}/dist")
 set(hosts_file "${root}/hosts.toml")
 set(pins "${root}/pins")
@@ -151,6 +161,8 @@ file(READ "${pins}/llvm-version" version)
 string(STRIP "${version}" version)
 string(REGEX MATCH "^[0-9]+" major "${version}")
 toml_get("${hosts_file}" "" tools TOOLS)
+toml_get("${hosts_file}" "" compiler COMPILER)
+set(BINARIES ${TOOLS} ${COMPILER})
 toml_sections("${hosts_file}" HOSTS)
 this_machine(machine)
 
@@ -164,50 +176,15 @@ elseif(STEP STREQUAL "tools")
         say("${tool}")
     endforeach()
     return()
+elseif(STEP STREQUAL "compiler")
+    foreach(tool IN LISTS COMPILER)
+        say("${tool}")
+    endforeach()
+    return()
 elseif(STEP STREQUAL "fetch-file")
     fetch("${URL}" "${FILE}" "${SHA256}")
     return()
 endif()
-
-# Every other step works on one host.
-if(NOT HOST IN_LIST HOSTS)
-    message(FATAL_ERROR "HOST is '${HOST}', and hosts.toml names ${HOSTS}")
-endif()
-if(STEP STREQUAL "get")
-    toml_get("${hosts_file}" "${HOST}" "${KEY}" value)
-    say("${value}")
-    return()
-endif()
-toml_get("${hosts_file}" "${HOST}" triple triple)
-toml_get("${hosts_file}" "${HOST}" built-on built_on)
-toml_get("${hosts_file}" "${HOST}" sysroot sysroot_kind)
-toml_get("${hosts_file}" "${HOST}" flags host_flags)
-if(STEP STREQUAL "host-info")
-    say("triple=${triple}")
-    say("built-on=${built_on}")
-    say("sysroot=${sysroot_kind}")
-    say("flags=${host_flags}")
-    return()
-endif()
-
-if(triple MATCHES "-linux-")
-    set(os linux)
-elseif(triple MATCHES "-apple-")
-    set(os macos)
-elseif(triple MATCHES "-windows-")
-    set(os windows)
-else()
-    message(FATAL_ERROR "${HOST}: the triple ${triple} names no known system")
-endif()
-string(REGEX MATCH "^[^-]+" arch "${triple}")
-set(exe "")
-if(os STREQUAL "windows")
-    set(exe ".exe")
-endif()
-
-set(work "${build_root}/${HOST}")
-set(tools_bin "${work}/llvm/bin")
-set(stamp "${work}/recipe")
 
 # The release of this machine: its archive, and the directory it unpacks to.
 set(release "")
@@ -226,24 +203,82 @@ if(release_tables)
     set(release_bin "${release}/bin")
 endif()
 
-if(sysroot_kind STREQUAL "musl")
-    set(sysroot "${sysroot_root}/${HOST}")
-elseif(sysroot_kind STREQUAL "macos-sdk")
-    toml_get("${pins}/sysroot.toml" macos-sdk path sysroot)
-elseif(sysroot_kind STREQUAL "xwin")
-    set(sysroot "${sysroot_root}/windows")
-else()
-    message(FATAL_ERROR "${HOST}: no sysroot of kind ${sysroot_kind}")
-endif()
+# Set the facts of <host> in the scope of the caller: triple, built_on,
+# sysroot_kind, host_flags, deployment, os, arch, exe and sysroot.
+function(setup_host host)
+    if(NOT host IN_LIST HOSTS)
+        message(FATAL_ERROR "HOST is '${host}', and hosts.toml names ${HOSTS}")
+    endif()
+    toml_get("${hosts_file}" "${host}" triple triple)
+    toml_get("${hosts_file}" "${host}" built-on built_on)
+    toml_get("${hosts_file}" "${host}" sysroot sysroot_kind)
+    toml_get("${hosts_file}" "${host}" flags host_flags)
+    if(triple MATCHES "-linux-")
+        set(os linux)
+    elseif(triple MATCHES "-apple-")
+        set(os macos)
+    elseif(triple MATCHES "-windows-")
+        set(os windows)
+    else()
+        message(FATAL_ERROR "${host}: the triple ${triple} names no known system")
+    endif()
+    set(deployment "")
+    if(os STREQUAL "macos")
+        toml_get("${hosts_file}" "${host}" deployment-target deployment)
+    endif()
+    string(REGEX MATCH "^[^-]+" arch "${triple}")
+    set(exe "")
+    if(os STREQUAL "windows")
+        set(exe ".exe")
+    endif()
+    if(sysroot_kind STREQUAL "musl")
+        set(sysroot "${sysroot_root}/${host}")
+    elseif(sysroot_kind STREQUAL "macos-sdk")
+        toml_get("${pins}/sysroot.toml" macos-sdk path sysroot)
+    elseif(sysroot_kind STREQUAL "xwin")
+        set(sysroot "${sysroot_root}/windows")
+    else()
+        message(FATAL_ERROR "${host}: no sysroot of kind ${sysroot_kind}")
+    endif()
+    foreach(name triple built_on sysroot_kind host_flags deployment os arch
+            exe sysroot)
+        set(${name} "${${name}}" PARENT_SCOPE)
+    endforeach()
+endfunction()
 
-if(STEP STREQUAL "paths")
-    say("bin=${tools_bin}")
-    say("stamp=${stamp}")
-    say("dist=${dist}")
-    say("exe=${exe}")
-    say("release=${release_bin}")
-    say("sysroot=${sysroot}")
-    return()
+if(NOT STEP STREQUAL "builtins")
+    # Every other step works on one host.
+    if(NOT HOST IN_LIST HOSTS)
+        message(FATAL_ERROR "HOST is '${HOST}', and hosts.toml names ${HOSTS}")
+    endif()
+    if(STEP STREQUAL "get")
+        toml_get("${hosts_file}" "${HOST}" "${KEY}" value)
+        say("${value}")
+        return()
+    endif()
+    setup_host("${HOST}")
+    if(STEP STREQUAL "host-info")
+        say("triple=${triple}")
+        say("built-on=${built_on}")
+        say("sysroot=${sysroot_kind}")
+        say("flags=${host_flags}")
+        return()
+    endif()
+    set(work "${build_root}/${HOST}")
+    set(tools_bin "${work}/llvm/bin")
+    set(stamp "${work}/recipe")
+    if(STEP STREQUAL "paths")
+        say("bin=${tools_bin}")
+        say("resource=${work}/llvm/lib/clang/${major}")
+        say("builtins=${builtins_install}/lib/clang/${major}/lib")
+        say("builtins-stamp=${builtins_stamp}")
+        say("stamp=${stamp}")
+        say("dist=${dist}")
+        say("exe=${exe}")
+        say("release=${release_bin}")
+        say("sysroot=${sysroot}")
+        return()
+    endif()
 endif()
 
 if(release STREQUAL "")
@@ -251,11 +286,11 @@ if(release STREQUAL "")
                         "the machine this runs on")
 endif()
 
-# DESIGN: a tool we publish runs on a machine that holds nothing but its
-# system. Linux has no system set, because the tools link musl statically.
-# macOS keeps libSystem and libc++, since it has no static libSystem.
-# Windows keeps the DLLs that every Windows 10 and 11 holds, and the CRT is
-# linked in with /MT. The six are the ones the tools of 23.1.1 import.
+# DESIGN: a binary we publish runs on a machine that holds nothing but its
+# system. Linux has no system set, because the binaries link musl
+# statically. macOS keeps libSystem and libc++, since it has no static
+# libSystem. Windows keeps the DLLs that every Windows 10 and 11 holds, and
+# the CRT is linked in with /MT. The six are the ones 23.1.1 imports.
 set(macos_libraries /usr/lib/libSystem.B.dylib /usr/lib/libc++.1.dylib)
 set(windows_libraries advapi32.dll crypt32.dll kernel32.dll ntdll.dll
     oleaut32.dll winhttp.dll)
@@ -266,13 +301,14 @@ set(macos_formats_arm64 mach-o-arm64 "mach-o arm64")
 set(windows_formats_x86_64 coff-x86-64)
 set(windows_formats_aarch64 coff-arm64)
 
-# Refuse a tool in bin that is missing, of another format, or names a
+# Refuse a binary in bin that is missing, of another format, or names a
 # shared library outside the system set. The Mac cannot run ldd on an ELF
-# file, so llvm-objdump reads the dynamic section of Linux tools.
+# file, so llvm-objdump reads the dynamic section of Linux binaries. A
+# macOS binary must name the deployment target of its host as minos.
 function(check_libraries bin)
     set(objdump "${release_bin}/llvm-objdump")
     find_program(OTOOL otool)
-    foreach(tool IN LISTS TOOLS)
+    foreach(tool IN LISTS BINARIES)
         set(file "${bin}/${tool}${exe}")
         if(NOT EXISTS "${file}")
             message(FATAL_ERROR "${file} is missing")
@@ -289,6 +325,7 @@ function(check_libraries bin)
                                 "takes ${${os}_formats_${arch}}")
         endif()
         set(needed "")
+        set(minos "")
         if(os STREQUAL "linux")
             string(REGEX MATCHALL "NEEDED +[^\n]+" lines "${headers}")
             foreach(line IN LISTS lines)
@@ -302,9 +339,13 @@ function(check_libraries bin)
             if(OTOOL)
                 execute_process(COMMAND "${OTOOL}" -L "${file}"
                                 OUTPUT_VARIABLE libraries)
+                execute_process(COMMAND "${OTOOL}" -l "${file}"
+                                OUTPUT_VARIABLE commands)
             else()
                 execute_process(COMMAND "${objdump}" --macho --dylibs-used
                                         "${file}" OUTPUT_VARIABLE libraries)
+                execute_process(COMMAND "${objdump}" --macho --private-headers
+                                        "${file}" OUTPUT_VARIABLE commands)
             endif()
             string(REGEX MATCHALL "\n\t[^ \n]+" lines "${libraries}")
             foreach(line IN LISTS lines)
@@ -313,6 +354,14 @@ function(check_libraries bin)
                     list(APPEND needed "${line}")
                 endif()
             endforeach()
+            string(REGEX MATCH "LC_BUILD_VERSION[^\n]*\n[^\n]*\n[^\n]*\n *minos ([0-9.]+)"
+                   found "${commands}")
+            set(minos "${CMAKE_MATCH_1}")
+            if(NOT minos STREQUAL deployment)
+                message(FATAL_ERROR "${tool} of ${HOST} records minos ${minos}, "
+                                    "and the deployment target is ${deployment}")
+            endif()
+            set(minos ", minos ${minos}")
         else()
             string(REGEX MATCHALL "DLL Name: [^\n]+" lines "${headers}")
             foreach(line IN LISTS lines)
@@ -328,18 +377,18 @@ function(check_libraries bin)
             message(FATAL_ERROR "${tool}${exe} of ${HOST} needs ${needed}, "
                                 "which is outside the system set of ${HOST}")
         endif()
-        message(STATUS "${tool}${exe}: ${format}, no library outside the system set")
+        message(STATUS "${tool}${exe}: ${format}${minos}, no library outside the system set")
     endforeach()
 endfunction()
 
-# Refuse a tool in bin that fails to run or reports another version. lld
+# Refuse a binary in bin that fails to run or reports another version. lld
 # answers under ld.lld, ld64.lld and lld-link, which antic calls, so each
 # flavor runs.
 function(check_version bin)
     set(prefix "")
     if(NOT HOST STREQUAL machine)
         if(HOST STREQUAL "macos-x86_64" AND machine STREQUAL "macos-arm64")
-            # Rosetta runs the x86_64 tools on this machine.
+            # Rosetta runs the x86_64 binaries on this machine.
             set(prefix arch -x86_64)
         elseif(DEFINED RUNNER)
             set(prefix ${RUNNER})
@@ -349,7 +398,7 @@ function(check_version bin)
         endif()
     endif()
     set(runs "")
-    foreach(tool IN LISTS TOOLS)
+    foreach(tool IN LISTS BINARIES)
         if(tool STREQUAL "lld")
             foreach(flavor gnu darwin link)
                 list(APPEND runs "lld -flavor ${flavor}")
@@ -384,142 +433,162 @@ if(STEP STREQUAL "check-libraries")
 elseif(STEP STREQUAL "check-version")
     check_version("${BIN}")
     return()
-elseif(NOT STEP STREQUAL "all")
+elseif(NOT STEP STREQUAL "all" AND NOT STEP STREQUAL "builtins")
     message(FATAL_ERROR "STEP is '${STEP}', which the recipe does not know")
 endif()
 
-if(NOT built_on STREQUAL machine)
-    message(FATAL_ERROR "hosts.toml builds ${HOST} on ${built_on}, and this is ${machine}")
-endif()
-file(REMOVE "${stamp}")
+# Write <file> with the commit of the recipe, and whether the files that
+# decide the build differ from it.
+function(write_stamp file)
+    execute_process(COMMAND git -C "${root}" rev-parse HEAD
+                    OUTPUT_VARIABLE commit OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE status ERROR_QUIET)
+    if(NOT status EQUAL 0)
+        set(commit none)
+    endif()
+    execute_process(COMMAND git -C "${root}" status --porcelain --
+                            build-llvm.cmake hosts.toml pins
+                    OUTPUT_VARIABLE changes RESULT_VARIABLE status)
+    set(clean no)
+    if(status EQUAL 0 AND changes STREQUAL "" AND NOT commit STREQUAL "none")
+        set(clean yes)
+    endif()
+    file(WRITE "${file}" "llvm=${version}\ncommit=${commit}\nclean=${clean}\n")
+endfunction()
 
 # Step 1. The release of this machine, checked against its digest and its
 # Sigstore attestation, which binds it to the release workflow of LLVM at
 # the tag of the pin.
-toml_get("${pins}/release.toml" "${machine}" sha256 release_sha256)
-toml_get("${pins}/release.toml" "${machine}" attestation attestation_url)
-string(REPLACE "@VERSION@" "${version}" attestation_url "${attestation_url}")
-fetch("${release_url}" "${downloads}/${release_asset}" "${release_sha256}")
-set(bundle "${downloads}/${release_asset}.jsonl")
-if(NOT EXISTS "${bundle}")
-    file(DOWNLOAD "${attestation_url}" "${bundle}.part" STATUS status)
-    list(GET status 0 code)
-    if(NOT code EQUAL 0)
-        file(REMOVE "${bundle}.part")
-        message(FATAL_ERROR "${attestation_url}: ${status}")
+function(prepare_release)
+    toml_get("${pins}/release.toml" "${machine}" sha256 release_sha256)
+    toml_get("${pins}/release.toml" "${machine}" attestation attestation_url)
+    string(REPLACE "@VERSION@" "${version}" attestation_url "${attestation_url}")
+    fetch("${release_url}" "${downloads}/${release_asset}" "${release_sha256}")
+    set(bundle "${downloads}/${release_asset}.jsonl")
+    if(NOT EXISTS "${bundle}")
+        file(DOWNLOAD "${attestation_url}" "${bundle}.part" STATUS status)
+        list(GET status 0 code)
+        if(NOT code EQUAL 0)
+            file(REMOVE "${bundle}.part")
+            message(FATAL_ERROR "${attestation_url}: ${status}")
+        endif()
+        file(RENAME "${bundle}.part" "${bundle}")
     endif()
-    file(RENAME "${bundle}.part" "${bundle}")
-endif()
-find_program(GH gh)
-if(NOT GH)
-    message(FATAL_ERROR "gh is not on the PATH. It verifies the attestation.")
-endif()
-execute_process(COMMAND "${GH}" attestation verify
-                        "${downloads}/${release_asset}" --bundle "${bundle}"
-                        --repo llvm/llvm-project
-                        --source-ref "refs/tags/llvmorg-${version}"
-                        --signer-workflow
-                        "llvm/llvm-project/.github/workflows/release-binaries.yml"
-                RESULT_VARIABLE verified)
-if(NOT verified EQUAL 0)
-    message(FATAL_ERROR "${release_asset} fails its Sigstore attestation")
-endif()
-unpack("${downloads}/${release_asset}" "${release}" "${release_sha256}" TOP)
+    find_program(GH gh)
+    if(NOT GH)
+        message(FATAL_ERROR "gh is not on the PATH. It verifies the attestation.")
+    endif()
+    execute_process(COMMAND "${GH}" attestation verify
+                            "${downloads}/${release_asset}" --bundle "${bundle}"
+                            --repo llvm/llvm-project
+                            --source-ref "refs/tags/llvmorg-${version}"
+                            --signer-workflow
+                            "llvm/llvm-project/.github/workflows/release-binaries.yml"
+                    RESULT_VARIABLE verified)
+    if(NOT verified EQUAL 0)
+        message(FATAL_ERROR "${release_asset} fails its Sigstore attestation")
+    endif()
+    unpack("${downloads}/${release_asset}" "${release}" "${release_sha256}" TOP)
+endfunction()
 
 # Step 2. The source.
-file(READ "${pins}/source.sha256" source_sha256)
-string(STRIP "${source_sha256}" source_sha256)
-set(source_asset "llvm-project-${version}.src.tar.xz")
-fetch("https://github.com/llvm/llvm-project/releases/download/llvmorg-${version}/${source_asset}"
-      "${downloads}/${source_asset}" "${source_sha256}")
 set(source "${source_root}/llvm-project-${version}.src")
-unpack("${downloads}/${source_asset}" "${source}" "${source_sha256}" TOP)
+function(prepare_source)
+    file(READ "${pins}/source.sha256" source_sha256)
+    string(STRIP "${source_sha256}" source_sha256)
+    set(source_asset "llvm-project-${version}.src.tar.xz")
+    fetch("https://github.com/llvm/llvm-project/releases/download/llvmorg-${version}/${source_asset}"
+          "${downloads}/${source_asset}" "${source_sha256}")
+    unpack("${downloads}/${source_asset}" "${source}" "${source_sha256}" TOP)
+endfunction()
 
-# The sysroot of the host.
-if(sysroot_kind STREQUAL "musl")
-    toml_get("${pins}/sysroot.toml" "musl-${arch}" url musl_url)
-    toml_get("${pins}/sysroot.toml" "musl-${arch}" sha256 musl_sha256)
-    toml_get("${pins}/sysroot.toml" "musl-${arch}" headers-url headers_url)
-    toml_get("${pins}/sysroot.toml" "musl-${arch}" headers-sha256 headers_sha256)
-    get_filename_component(musl_asset "${musl_url}" NAME)
-    get_filename_component(headers_asset "${headers_url}" NAME)
-    fetch("${musl_url}" "${downloads}/${arch}/${musl_asset}" "${musl_sha256}")
-    fetch("${headers_url}" "${downloads}/${arch}/${headers_asset}"
-          "${headers_sha256}")
-    # Both packages unpack into one tree, so the stamp names both digests.
-    set(sysroot_digest "${musl_sha256} ${headers_sha256}")
-    set(done "")
-    if(EXISTS "${sysroot}/.unpacked")
-        file(READ "${sysroot}/.unpacked" done)
+# The sysroot of the host that setup_host named last.
+function(prepare_sysroot)
+    if(sysroot_kind STREQUAL "musl")
+        toml_get("${pins}/sysroot.toml" "musl-${arch}" url musl_url)
+        toml_get("${pins}/sysroot.toml" "musl-${arch}" sha256 musl_sha256)
+        toml_get("${pins}/sysroot.toml" "musl-${arch}" headers-url headers_url)
+        toml_get("${pins}/sysroot.toml" "musl-${arch}" headers-sha256 headers_sha256)
+        get_filename_component(musl_asset "${musl_url}" NAME)
+        get_filename_component(headers_asset "${headers_url}" NAME)
+        fetch("${musl_url}" "${downloads}/${arch}/${musl_asset}" "${musl_sha256}")
+        fetch("${headers_url}" "${downloads}/${arch}/${headers_asset}"
+              "${headers_sha256}")
+        # Both packages unpack into one tree, so the stamp names both digests.
+        set(sysroot_digest "${musl_sha256} ${headers_sha256}")
+        set(done "")
+        if(EXISTS "${sysroot}/.unpacked")
+            file(READ "${sysroot}/.unpacked" done)
+        endif()
+        if(NOT done STREQUAL "${sysroot_digest}\n")
+            message(STATUS "unpack the sysroot ${sysroot}")
+            file(REMOVE_RECURSE "${sysroot}")
+            foreach(asset "${musl_asset}" "${headers_asset}")
+                file(ARCHIVE_EXTRACT INPUT "${downloads}/${arch}/${asset}"
+                     DESTINATION "${sysroot}")
+            endforeach()
+            file(WRITE "${sysroot}/.unpacked" "${sysroot_digest}\n")
+        endif()
+    elseif(sysroot_kind STREQUAL "macos-sdk")
+        if(NOT EXISTS "${sysroot}/SDKSettings.json")
+            message(FATAL_ERROR "${sysroot} is missing. Install the Command Line "
+                                "Tools that carry it.")
+        endif()
+    elseif(sysroot_kind STREQUAL "xwin")
+        toml_get("${pins}/sysroot.toml" xwin version xwin_version)
+        toml_get("${pins}/sysroot.toml" xwin crt xwin_crt)
+        toml_get("${pins}/sysroot.toml" xwin sdk xwin_sdk)
+        toml_get("${pins}/sysroot.toml" xwin tree xwin_tree)
+        if(NOT EXISTS "${sysroot}/.unpacked")
+            if(NOT ACCEPT_LICENSE STREQUAL "yes")
+                message(FATAL_ERROR "xwin downloads the Microsoft CRT and Windows "
+                                    "SDK, which Microsoft licenses to you. Pass "
+                                    "-DACCEPT_LICENSE=yes to accept their terms.")
+            endif()
+            find_program(XWIN xwin)
+            if(NOT XWIN)
+                message(FATAL_ERROR "xwin is not on the PATH. Run cargo install "
+                                    "xwin --locked --version ${xwin_version}")
+            endif()
+            execute_process(COMMAND "${XWIN}" --version OUTPUT_VARIABLE found)
+            if(NOT found MATCHES "^xwin ${xwin_version}\n?$")
+                message(FATAL_ERROR "${XWIN} is ${found}, the pin is ${xwin_version}")
+            endif()
+            file(REMOVE_RECURSE "${sysroot}")
+            # DESIGN: the winsysroot layout is the one of LLVM's WinMsvc.cmake.
+            # xwin adds no casing links, because WinMsvc.cmake adds its own on
+            # a file system that needs them.
+            execute_process(COMMAND "${XWIN}" --accept-license
+                                    --cache-dir "${downloads}/xwin"
+                                    --arch x86_64,aarch64
+                                    --crt-version "${xwin_crt}"
+                                    --sdk-version "${xwin_sdk}"
+                                    splat --output "${sysroot}"
+                                    --use-winsysroot-style
+                                    --preserve-ms-arch-notation
+                                    --disable-symlinks --copy
+                            RESULT_VARIABLE splat)
+            if(NOT splat EQUAL 0)
+                message(FATAL_ERROR "xwin failed to write ${sysroot}")
+            endif()
+            # The digest hashes the sorted SHA-256 lines of the regular files.
+            file(GLOB_RECURSE files LIST_DIRECTORIES false RELATIVE "${sysroot}"
+                 "${sysroot}/*")
+            list(SORT files)
+            set(lines "")
+            foreach(name IN LISTS files)
+                file(SHA256 "${sysroot}/${name}" digest)
+                string(APPEND lines "${digest}  ${name}\n")
+            endforeach()
+            string(SHA256 tree "${lines}")
+            if(NOT tree STREQUAL xwin_tree)
+                message(FATAL_ERROR "${sysroot} has the digest ${tree}, and "
+                                    "pins/sysroot.toml holds '${xwin_tree}'")
+            endif()
+            file(WRITE "${sysroot}/.unpacked" "${tree}\n")
+        endif()
     endif()
-    if(NOT done STREQUAL "${sysroot_digest}\n")
-        message(STATUS "unpack the sysroot of ${HOST}")
-        file(REMOVE_RECURSE "${sysroot}")
-        foreach(asset "${musl_asset}" "${headers_asset}")
-            file(ARCHIVE_EXTRACT INPUT "${downloads}/${arch}/${asset}"
-                 DESTINATION "${sysroot}")
-        endforeach()
-        file(WRITE "${sysroot}/.unpacked" "${sysroot_digest}\n")
-    endif()
-elseif(sysroot_kind STREQUAL "macos-sdk")
-    if(NOT EXISTS "${sysroot}/SDKSettings.json")
-        message(FATAL_ERROR "${sysroot} is missing. Install the Command Line "
-                            "Tools that carry it.")
-    endif()
-elseif(sysroot_kind STREQUAL "xwin")
-    toml_get("${pins}/sysroot.toml" xwin version xwin_version)
-    toml_get("${pins}/sysroot.toml" xwin crt xwin_crt)
-    toml_get("${pins}/sysroot.toml" xwin sdk xwin_sdk)
-    toml_get("${pins}/sysroot.toml" xwin tree xwin_tree)
-    if(NOT EXISTS "${sysroot}/.unpacked")
-        if(NOT ACCEPT_LICENSE STREQUAL "yes")
-            message(FATAL_ERROR "xwin downloads the Microsoft CRT and Windows "
-                                "SDK, which Microsoft licenses to you. Pass "
-                                "-DACCEPT_LICENSE=yes to accept their terms.")
-        endif()
-        find_program(XWIN xwin)
-        if(NOT XWIN)
-            message(FATAL_ERROR "xwin is not on the PATH. Run cargo install "
-                                "xwin --locked --version ${xwin_version}")
-        endif()
-        execute_process(COMMAND "${XWIN}" --version OUTPUT_VARIABLE found)
-        if(NOT found MATCHES "^xwin ${xwin_version}\n?$")
-            message(FATAL_ERROR "${XWIN} is ${found}, the pin is ${xwin_version}")
-        endif()
-        file(REMOVE_RECURSE "${sysroot}")
-        # DESIGN: the winsysroot layout is the one of LLVM's WinMsvc.cmake.
-        # xwin adds no casing links, because WinMsvc.cmake adds its own on
-        # a file system that needs them.
-        execute_process(COMMAND "${XWIN}" --accept-license
-                                --cache-dir "${downloads}/xwin"
-                                --arch x86_64,aarch64
-                                --crt-version "${xwin_crt}"
-                                --sdk-version "${xwin_sdk}"
-                                splat --output "${sysroot}"
-                                --use-winsysroot-style
-                                --preserve-ms-arch-notation
-                                --disable-symlinks --copy
-                        RESULT_VARIABLE splat)
-        if(NOT splat EQUAL 0)
-            message(FATAL_ERROR "xwin failed to write ${sysroot}")
-        endif()
-        # The digest hashes the sorted SHA-256 lines of the regular files.
-        file(GLOB_RECURSE files LIST_DIRECTORIES false RELATIVE "${sysroot}"
-             "${sysroot}/*")
-        list(SORT files)
-        set(lines "")
-        foreach(name IN LISTS files)
-            file(SHA256 "${sysroot}/${name}" digest)
-            string(APPEND lines "${digest}  ${name}\n")
-        endforeach()
-        string(SHA256 tree "${lines}")
-        if(NOT tree STREQUAL xwin_tree)
-            message(FATAL_ERROR "${sysroot} has the digest ${tree}, and "
-                                "pins/sysroot.toml holds '${xwin_tree}'")
-        endif()
-        file(WRITE "${sysroot}/.unpacked" "${tree}\n")
-    endif()
-endif()
+endfunction()
 
 # Configure <dir> from <source dir> with the toolchain file and the options
 # given, and build the targets named after TARGETS.
@@ -550,13 +619,13 @@ if(NOT NINJA)
 endif()
 
 # DESIGN: debug information and __FILE__ would carry the path of this
-# machine into every tool. The map turns the build tree into a dot, and a
-# check below refuses a tool that still holds it.
+# machine into every binary. The map turns the build tree into a dot, and
+# a check below refuses a binary that still holds it.
 set(prefix_map "-ffile-prefix-map=${build_root}=.")
 
-# Write the toolchain file of this host to <file>. RUNTIMES writes the one
-# that builds the C++ runtimes of a musl host, which cannot link against
-# them yet.
+# Write the toolchain file of the host that setup_host named last to
+# <file>. RUNTIMES writes the one that builds the runtimes of a target,
+# whose try-compiles cannot link against them yet.
 function(write_toolchain file)
     cmake_parse_arguments(PARSE_ARGV 1 arg "RUNTIMES" "" "")
     set(rel "${release_bin}")
@@ -590,7 +659,7 @@ set(CMAKE_CXX_FLAGS_INIT \"${prefix_map}\")
 set(CMAKE_ASM_FLAGS_INIT \"${prefix_map}\")
 ")
         else()
-            # DESIGN: the tools link libc++, libc++abi, libunwind and the
+            # DESIGN: the binaries link libc++, libc++abi, libunwind and the
             # compiler-rt builtins built from the pinned source, and musl.
             # -static leaves no library to load, and -s drops the symbols.
             set(resource "${rt}/lib/clang/${major}")
@@ -603,8 +672,8 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT \"-fuse-ld=lld -static -s -rtlib=compiler-rt -un
         endif()
     elseif(os STREQUAL "macos")
         # DESIGN: the libc++ headers of the SDK match the libc++ of the
-        # system that the tools load. The headers beside the release clang
-        # would name symbols an older macOS lacks.
+        # system that the binaries load. The headers beside the release
+        # clang would name symbols an older macOS lacks.
         string(APPEND text
 "set(CMAKE_C_COMPILER \"${rel}/clang\")
 set(CMAKE_CXX_COMPILER \"${rel}/clang++\")
@@ -613,6 +682,7 @@ set(CMAKE_OSX_SYSROOT \"${sysroot}\" CACHE PATH \"\")
 set(CMAKE_AR \"${rel}/llvm-ar\" CACHE FILEPATH \"\")
 set(CMAKE_RANLIB \"${rel}/llvm-ranlib\" CACHE FILEPATH \"\")
 set(CMAKE_LIBTOOL \"${rel}/llvm-libtool-darwin\" CACHE FILEPATH \"\")
+set(CMAKE_LIPO \"${rel}/llvm-lipo\" CACHE FILEPATH \"\")
 set(CMAKE_C_FLAGS_INIT \"${prefix_map}\")
 set(CMAKE_CXX_FLAGS_INIT \"${prefix_map} -nostdinc++ -isystem ${sysroot}/usr/include/c++/v1\")
 set(CMAKE_EXE_LINKER_FLAGS_INIT \"-fuse-ld=lld -Wl,-S\")
@@ -620,7 +690,7 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT \"-fuse-ld=lld -Wl,-S\")
     else()
         # DESIGN: WinMsvc.cmake of the LLVM source is the cross toolchain
         # that LLVM keeps for clang-cl on another system. /MT links the CRT
-        # in, so the tools need no Visual C++ runtime on the machine.
+        # in, so the binaries need no Visual C++ runtime on the machine.
         string(APPEND text
 "set(LLVM_NATIVE_TOOLCHAIN \"${release}\")
 set(LLVM_WINSYSROOT \"${sysroot}\")
@@ -634,6 +704,138 @@ include(\"${source}/llvm/cmake/platforms/WinMsvc.cmake\")
     endif()
     file(WRITE "${file}" "${text}")
 endfunction()
+
+# The options of compiler-rt that build the builtins and nothing else.
+set(builtins_options
+    -DCOMPILER_RT_BUILD_BUILTINS=ON
+    -DCOMPILER_RT_BUILD_SANITIZERS=OFF
+    -DCOMPILER_RT_BUILD_XRAY=OFF
+    -DCOMPILER_RT_BUILD_LIBFUZZER=OFF
+    -DCOMPILER_RT_BUILD_PROFILE=OFF
+    -DCOMPILER_RT_BUILD_MEMPROF=OFF
+    -DCOMPILER_RT_BUILD_ORC=OFF
+    -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF
+    -DCOMPILER_RT_BUILD_GWP_ASAN=OFF
+    -DCOMPILER_RT_INCLUDE_TESTS=OFF)
+
+# Build the builtins of <host> as a target into the install tree of the
+# builtins. A Linux target also gets the start files of compiler-rt, which
+# clang takes when it links for musl. The macOS builtins are one universal
+# archive for both processors, which the arm64 host builds.
+function(build_builtins host)
+    setup_host("${host}")
+    if(host STREQUAL "macos-x86_64")
+        return()
+    endif()
+    prepare_sysroot()
+    set(work "${builtins_root}/${host}")
+    set(toolchain "${work}/toolchain.cmake")
+    set(cache "${work}/cache.cmake")
+    write_toolchain("${toolchain}" RUNTIMES)
+    set(cache_text "set(LLVM_ENABLE_RUNTIMES \"compiler-rt\" CACHE STRING \"\" FORCE)\n")
+    set(options -C "${cache}" "-DCMAKE_TOOLCHAIN_FILE=${toolchain}"
+        -DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=${builtins_install}"
+        "-DCOMPILER_RT_INSTALL_PATH=${builtins_install}/lib/clang/${major}"
+        -DLLVM_INCLUDE_TESTS=OFF ${builtins_options})
+    if(os STREQUAL "macos")
+        string(APPEND cache_text
+            "set(DARWIN_osx_ARCHS \"arm64;x86_64\" CACHE STRING \"\" FORCE)\n"
+            "set(DARWIN_osx_BUILTIN_ARCHS \"arm64;x86_64\" CACHE STRING \"\" FORCE)\n")
+        list(APPEND options -DCOMPILER_RT_ENABLE_IOS=OFF
+             -DCOMPILER_RT_ENABLE_WATCHOS=OFF -DCOMPILER_RT_ENABLE_TVOS=OFF
+             -DCOMPILER_RT_ENABLE_XROS=OFF
+             "-DDARWIN_macosx_CACHED_SYSROOT=${sysroot}"
+             "-DDARWIN_osx_SYSROOT=${sysroot}")
+    else()
+        list(APPEND options -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON
+             "-DLLVM_DEFAULT_TARGET_TRIPLE=${triple}"
+             -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON)
+        if(os STREQUAL "linux")
+            list(APPEND options -DCOMPILER_RT_BUILD_CRT=ON)
+        else()
+            # compiler-rt reads the target of a default-target build from
+            # CMake, which WinMsvc.cmake gives clang-cl as a flag alone.
+            list(APPEND options ${host_flags}
+                 "-DCMAKE_C_COMPILER_TARGET=${triple}"
+                 "-DCMAKE_CXX_COMPILER_TARGET=${triple}"
+                 "-DCMAKE_ASM_COMPILER_TARGET=${triple}")
+        endif()
+    endif()
+    file(WRITE "${cache}" "${cache_text}")
+    cmake_build("${work}/build" "${source}/runtimes" OPTIONS ${options}
+                TARGETS install)
+endfunction()
+
+# Refuse the builtins unless each target has its files, of its format.
+function(check_builtins)
+    set(lib "${builtins_install}/lib/clang/${major}/lib")
+    set(objdump "${release_bin}/llvm-objdump")
+    set(expect
+        "x86_64-unknown-linux-musl/libclang_rt.builtins.a=elf64-x86-64"
+        "x86_64-unknown-linux-musl/clang_rt.crtbegin.o=elf64-x86-64"
+        "x86_64-unknown-linux-musl/clang_rt.crtend.o=elf64-x86-64"
+        "aarch64-unknown-linux-musl/libclang_rt.builtins.a=elf64-littleaarch64"
+        "aarch64-unknown-linux-musl/clang_rt.crtbegin.o=elf64-littleaarch64"
+        "aarch64-unknown-linux-musl/clang_rt.crtend.o=elf64-littleaarch64"
+        "x86_64-pc-windows-msvc/clang_rt.builtins.lib=coff-x86-64"
+        "aarch64-pc-windows-msvc/clang_rt.builtins.lib=coff-arm64")
+    foreach(row IN LISTS expect)
+        string(REPLACE "=" ";" row "${row}")
+        list(GET row 0 name)
+        list(GET row 1 format)
+        if(NOT EXISTS "${lib}/${name}")
+            message(FATAL_ERROR "the builtins lack ${name}")
+        endif()
+        execute_process(COMMAND "${objdump}" -f "${lib}/${name}"
+                        OUTPUT_VARIABLE headers RESULT_VARIABLE status)
+        string(REGEX MATCHALL "file format [^\n]+" formats "${headers}")
+        list(REMOVE_DUPLICATES formats)
+        if(NOT status EQUAL 0 OR NOT formats STREQUAL "file format ${format}")
+            message(FATAL_ERROR "${name} holds ${formats}, not ${format}")
+        endif()
+        message(STATUS "${name}: ${format}")
+    endforeach()
+    execute_process(COMMAND "${release_bin}/llvm-lipo" -archs
+                            "${lib}/darwin/libclang_rt.osx.a"
+                    OUTPUT_VARIABLE archs OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE status)
+    string(REPLACE " " ";" archs "${archs}")
+    list(SORT archs)
+    if(NOT status EQUAL 0 OR NOT archs STREQUAL "arm64;x86_64")
+        message(FATAL_ERROR "darwin/libclang_rt.osx.a holds '${archs}', not arm64 and x86_64")
+    endif()
+    message(STATUS "darwin/libclang_rt.osx.a: ${archs}")
+endfunction()
+
+if(STEP STREQUAL "builtins")
+    file(REMOVE "${builtins_stamp}")
+    prepare_release()
+    prepare_source()
+    file(REMOVE_RECURSE "${builtins_install}")
+    foreach(host IN LISTS HOSTS)
+        build_builtins("${host}")
+    endforeach()
+    check_builtins()
+    write_stamp("${builtins_stamp}")
+    message(STATUS "${builtins_install} holds the builtins of the six targets")
+    return()
+endif()
+
+if(NOT built_on STREQUAL machine)
+    message(FATAL_ERROR "hosts.toml builds ${HOST} on ${built_on}, and this is ${machine}")
+endif()
+file(REMOVE "${stamp}")
+prepare_release()
+prepare_source()
+prepare_sysroot()
+
+# DESIGN: the deployment target of a macOS host reaches the compiler
+# through CMake and through the environment, so a binary built by a step
+# that reads only one of them still starts on that macOS.
+if(os STREQUAL "macos")
+    list(APPEND host_flags "-DCMAKE_OSX_DEPLOYMENT_TARGET=${deployment}")
+    set(ENV{MACOSX_DEPLOYMENT_TARGET} "${deployment}")
+endif()
 
 # Step 3, first half. A musl host builds its C++ runtimes and the
 # compiler-rt builtins from the pinned source, since musl-dev carries none.
@@ -654,17 +856,8 @@ if(os STREQUAL "linux")
         -DLLVM_INCLUDE_TESTS=OFF
         -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON
         "-DCOMPILER_RT_INSTALL_PATH=${work}/runtimes-install/lib/clang/${major}"
-        -DCOMPILER_RT_BUILD_BUILTINS=ON
+        ${builtins_options}
         -DCOMPILER_RT_BUILD_CRT=ON
-        -DCOMPILER_RT_BUILD_SANITIZERS=OFF
-        -DCOMPILER_RT_BUILD_XRAY=OFF
-        -DCOMPILER_RT_BUILD_LIBFUZZER=OFF
-        -DCOMPILER_RT_BUILD_PROFILE=OFF
-        -DCOMPILER_RT_BUILD_MEMPROF=OFF
-        -DCOMPILER_RT_BUILD_ORC=OFF
-        -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF
-        -DCOMPILER_RT_BUILD_GWP_ASAN=OFF
-        -DCOMPILER_RT_INCLUDE_TESTS=OFF
         -DLIBUNWIND_ENABLE_SHARED=OFF
         -DLIBUNWIND_USE_COMPILER_RT=ON
         -DLIBUNWIND_INCLUDE_TESTS=OFF
@@ -724,16 +917,17 @@ else()
     set(zlib_library "${work}/zlib/libz.a")
 endif()
 
-# Step 3. LLVM with lld, the X86 and AArch64 back ends and zlib. Every
-# option that pulls a library of the build machine into a tool is off.
-# llvm-tblgen comes from the release, which runs on this machine.
+# Step 3. LLVM with lld and clang, the X86 and AArch64 back ends and zlib.
+# Every option that pulls a library of the build machine into a binary is
+# off. llvm-tblgen and clang-tblgen come from the release, which runs on
+# this machine.
 file(WRITE "${work}/llvm-cache.cmake"
-     "set(LLVM_TARGETS_TO_BUILD \"X86;AArch64\" CACHE STRING \"\" FORCE)\n")
+     "set(LLVM_TARGETS_TO_BUILD \"X86;AArch64\" CACHE STRING \"\" FORCE)\n"
+     "set(LLVM_ENABLE_PROJECTS \"lld;clang\" CACHE STRING \"\" FORCE)\n")
 cmake_build("${work}/llvm" "${source}/llvm" OPTIONS
     -C "${work}/llvm-cache.cmake"
     "-DCMAKE_TOOLCHAIN_FILE=${toolchain}"
     -DCMAKE_BUILD_TYPE=Release
-    -DLLVM_ENABLE_PROJECTS=lld
     "-DLLVM_HOST_TRIPLE=${triple}"
     "-DLLVM_TABLEGEN=${release_bin}/llvm-tblgen${machine_exe}"
     "-DLLVM_NATIVE_TOOL_DIR=${release_bin}"
@@ -757,13 +951,14 @@ cmake_build("${work}/llvm" "${source}/llvm" OPTIONS
     -DLLVM_INCLUDE_EXAMPLES=OFF
     -DLLVM_INCLUDE_DOCS=OFF
     ${host_flags}
-    # Step 4. The five tools and nothing else.
-    TARGETS ${TOOLS})
+    # Step 4. The five tools, clang and its built-in headers, and nothing
+    # else.
+    TARGETS ${BINARIES} clang-resource-headers)
 
 # Steps 5 and 6.
 check_libraries("${tools_bin}")
 string(REGEX REPLACE "([][+.*()^$?|\\\\])" "\\\\\\1" build_root_regex "${build_root}")
-foreach(tool IN LISTS TOOLS)
+foreach(tool IN LISTS BINARIES)
     file(STRINGS "${tools_bin}/${tool}${exe}" leaked
          REGEX "${build_root_regex}" LIMIT_COUNT 1)
     if(leaked)
@@ -771,21 +966,5 @@ foreach(tool IN LISTS TOOLS)
     endif()
 endforeach()
 check_version("${tools_bin}")
-
-# The stamp names the commit of the recipe, and whether the files that
-# decide the build differ from it.
-execute_process(COMMAND git -C "${root}" rev-parse HEAD
-                OUTPUT_VARIABLE commit OUTPUT_STRIP_TRAILING_WHITESPACE
-                RESULT_VARIABLE status ERROR_QUIET)
-if(NOT status EQUAL 0)
-    set(commit none)
-endif()
-execute_process(COMMAND git -C "${root}" status --porcelain --
-                        build-llvm.cmake hosts.toml pins
-                OUTPUT_VARIABLE changes RESULT_VARIABLE status)
-set(clean no)
-if(status EQUAL 0 AND changes STREQUAL "" AND NOT commit STREQUAL "none")
-    set(clean yes)
-endif()
-file(WRITE "${stamp}" "llvm=${version}\ncommit=${commit}\nclean=${clean}\n")
-message(STATUS "${tools_bin} holds the tools of LLVM ${version} for ${HOST}")
+write_stamp("${stamp}")
+message(STATUS "${tools_bin} holds the tools and clang of LLVM ${version} for ${HOST}")

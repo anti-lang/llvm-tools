@@ -1,5 +1,6 @@
 #!/bin/sh
-# Publish the six archives of pins/build-number as a GitHub release.
+# Publish the twelve archives of pins/build-number as a GitHub release, the
+# tools and clang of each of the six hosts.
 #
 #   scripts/release.sh
 #
@@ -28,17 +29,19 @@ fi
 
 commit=""
 files=""
-for host in $(toml_sections "$root/hosts.toml"); do
-    archive="$dist/$(archive_name "$host")"
-    [ -f "$archive" ] || die "$archive is missing. Run scripts/pack.sh $host."
-    named=$(tar -xOJf "$archive" VERSION | sed -n 's/^recipe //p')
-    [ -n "$commit" ] || commit=$named
-    [ "$named" = "$commit" ] ||
-        die "$archive names the recipe commit $named, and another archive $commit"
-    files="$files $archive"
+for kind in $archive_kinds; do
+    for host in $(toml_sections "$root/hosts.toml"); do
+        archive="$dist/$(archive_name "$kind" "$host")"
+        [ -f "$archive" ] || die "$archive is missing. Run scripts/pack.sh $host."
+        named=$(tar -xOJf "$archive" VERSION | sed -n 's/^recipe //p')
+        [ -n "$commit" ] || commit=$named
+        [ "$named" = "$commit" ] ||
+            die "$archive names the recipe commit $named, and another archive $commit"
+        files="$files $archive"
+    done
 done
 
-# The manifest lists the six archives, sorted by name, in the format that
+# The manifest lists the archives, sorted by name, in the format that
 # shasum -c and sha256sum -c read.
 (cd "$dist" && for file in $files; do basename "$file"; done | sort |
     xargs shasum -a 256 > SHA256SUMS)
@@ -87,7 +90,7 @@ fi
 # failed upload leaves no published release with missing files.
 gh release create "$tag" --repo "$repo" --verify-tag \
     --title "LLVM $version, anti build $build_number" \
-    --notes "The five LLVM tools of LLVM $version for six hosts, built from the recipe at $commit. SHA256SUMS.sig is an ECDSA P-256 signature over the SHA-256 digest of SHA256SUMS, by the key of release@anti-lang.com in keys/release.pem, whose SHA-256 fingerprint is $fingerprint." \
+    --notes "The five LLVM tools and clang of LLVM $version for six hosts, built from the recipe at $commit. SHA256SUMS.sig is an ECDSA P-256 signature over the SHA-256 digest of SHA256SUMS, by the key of release@anti-lang.com in keys/release.pem, whose SHA-256 fingerprint is $fingerprint." \
     $files "$dist/SHA256SUMS" "$dist/SHA256SUMS.sig"
 
 mkdir "$work/readback"

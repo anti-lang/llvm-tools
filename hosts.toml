@@ -3,32 +3,41 @@
 # of sysroot from pins/sysroot.toml and the CMake options of the host.
 # build-llvm.cmake and scripts/common.sh read the tables.
 
-# The five tools that every archive holds.
+# The five tools that every tools archive holds.
 tools = ["lld", "llvm-mc", "llvm-ar", "llvm-objdump", "llvm-readobj"]
+
+# The compiler that every clang archive holds, beside its built-in headers
+# and the compiler-rt builtins of all six targets.
+compiler = ["clang"]
 
 [linux-x86_64]
 triple = "x86_64-unknown-linux-musl"
 built-on = "macos-arm64"
 sysroot = "musl"
-flags = []
+# clang is linked against musl and compiles for glibc by default, the C
+# library of the distributions that build antic. --target picks musl.
+flags = ["-DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-unknown-linux-gnu"]
 
 [linux-arm64]
 triple = "aarch64-unknown-linux-musl"
 built-on = "macos-arm64"
 sysroot = "musl"
-flags = []
+flags = ["-DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-unknown-linux-gnu"]
 
 [macos-arm64]
 triple = "arm64-apple-darwin"
 built-on = "macos-arm64"
 sysroot = "macos-sdk"
-flags = ["-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"]
+# The oldest macOS the binaries start on. Each one records it as minos.
+deployment-target = "11.0"
+flags = ["-DCMAKE_OSX_ARCHITECTURES=arm64"]
 
 [macos-x86_64]
 triple = "x86_64-apple-darwin"
 built-on = "macos-arm64"
 sysroot = "macos-sdk"
-flags = ["-DCMAKE_OSX_ARCHITECTURES=x86_64", "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"]
+deployment-target = "11.0"
+flags = ["-DCMAKE_OSX_ARCHITECTURES=x86_64"]
 
 [windows-x86_64]
 triple = "x86_64-pc-windows-msvc"

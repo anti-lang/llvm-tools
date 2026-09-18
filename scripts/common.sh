@@ -51,9 +51,12 @@ build_number=$(cat "$root/pins/build-number")
 # of the rebuilds of that version, as in 23.1.1-anti.1.
 tag="$version-anti.$build_number"
 
-# The file name of the archive of <host>.
+# The kinds of archive that each host has: the five tools, and clang.
+archive_kinds="llvm-tools clang"
+
+# The file name of the archive of <kind> for <host>.
 archive_name() {
-    printf 'llvm-tools-%s-%s.tar.xz\n' "$tag" "$1"
+    printf '%s-%s-%s.tar.xz\n' "$1" "$tag" "$2"
 }
 
 # Fail unless <host> is a table of hosts.toml.

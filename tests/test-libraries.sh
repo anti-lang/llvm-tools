@@ -7,10 +7,10 @@
 
 bin=$(release_bin)
 clang="$bin/clang"
-tools="lld llvm-mc llvm-ar llvm-objdump llvm-readobj"
+tools="lld llvm-mc llvm-ar llvm-objdump llvm-readobj clang"
 
-# Fill directory $1 with the five tool names, each a copy of file $2 with
-# the suffix $3.
+# Fill directory $1 with the five tool names and clang, each a copy of file
+# $2 with the suffix $3.
 five() {
     mkdir -p "$1"
     for tool in $tools; do
@@ -52,6 +52,13 @@ five "$work/macos-dynamic" "$work/macho-dynamic" ""
 check macos-arm64 "$work/macos-system" >/dev/null ||
     fail "a macOS tool that needs libSystem alone was refused"
 expect_refusal "/opt/dep/libdep.dylib" check macos-arm64 "$work/macos-dynamic"
+
+# macOS: a tool built for a newer macOS than the deployment target refuses
+# to start on an older one, so its minos is refused.
+"$clang" -arch arm64 -isysroot "$sdk" -fuse-ld=lld -mmacos-version-min=13.0 \
+    -o "$work/macho-newer" "$work/alone.c"
+five "$work/macos-newer" "$work/macho-newer" ""
+expect_refusal "minos 13.0" check macos-arm64 "$work/macos-newer"
 
 # Windows: an import of KERNEL32.dll passes, one of dep.dll does not.
 printf 'LIBRARY dep.dll\nEXPORTS\n  dep_value\n' > "$work/dep.def"

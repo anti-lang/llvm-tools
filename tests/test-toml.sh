@@ -18,6 +18,23 @@ shell_tools=$(toml_get "$root/hosts.toml" "" tools)
 [ "$shell_tools" = "$(printf 'lld\nllvm-mc\nllvm-ar\nllvm-objdump\nllvm-readobj')" ] ||
     fail "hosts.toml names the tools '$shell_tools'"
 
+# The compiler goes into an archive of its own, and the recipe checks it
+# as it checks the tools.
+cmake_compiler=$(recipe "$root" -DSTEP=compiler)
+shell_compiler=$(toml_get "$root/hosts.toml" "" compiler)
+[ "$cmake_compiler" = "$shell_compiler" ] ||
+    fail "the readers disagree on the compiler: '$cmake_compiler' and '$shell_compiler'"
+[ "$shell_compiler" = clang ] || fail "hosts.toml names the compiler '$shell_compiler'"
+
+# A macOS host names its deployment target once, and no flag spells it.
+for host in macos-arm64 macos-x86_64; do
+    [ "$(toml_get "$root/hosts.toml" "$host" deployment-target)" = 11.0 ] ||
+        fail "$host has no deployment target of 11.0"
+    if toml_get "$root/hosts.toml" "$host" flags | grep -q DEPLOYMENT_TARGET; then
+        fail "the flags of $host spell the deployment target a second time"
+    fi
+done
+
 for host in $shell_hosts; do
     info=$(recipe "$root" -DHOST="$host" -DSTEP=host-info)
     for key in triple built-on sysroot; do

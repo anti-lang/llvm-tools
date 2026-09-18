@@ -13,6 +13,8 @@ tools_reporting() {
     done
     printf '#!/bin/sh\necho "LLD %s (compatible with GNU linkers)"\n' "$2" \
         > "$1/lld"
+    printf '#!/bin/sh\necho "clang version %s (https://github.com/llvm/llvm-project)"\n' \
+        "$2" > "$1/clang"
     chmod +x "$1"/*
 }
 
@@ -24,6 +26,11 @@ tools_reporting "$work/wrong" "$version"
 printf '#!/bin/sh\necho "LLVM version 1.2.3"\n' > "$work/wrong/llvm-ar"
 expect_refusal "llvm-ar reports 1.2.3" recipe "$root" -DHOST=macos-arm64 \
     -DSTEP=check-version -DBIN="$work/wrong"
+
+tools_reporting "$work/old-clang" "$version"
+printf '#!/bin/sh\necho "clang version 22.1.3"\n' > "$work/old-clang/clang"
+expect_refusal "clang reports 22.1.3" recipe "$root" -DHOST=macos-arm64 \
+    -DSTEP=check-version -DBIN="$work/old-clang"
 
 # lld runs once per flavor, so a driver that fails for one is refused.
 tools_reporting "$work/flavor" "$version"
