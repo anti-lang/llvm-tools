@@ -290,10 +290,12 @@ endif()
 # system. Linux has no system set, because the binaries link musl
 # statically. macOS keeps libSystem and libc++, since it has no static
 # libSystem. Windows keeps the DLLs that every Windows 10 and 11 holds, and
-# the CRT is linked in with /MT. The six are the ones 23.1.1 imports.
+# the CRT is linked in with /MT. The seven are the ones that the tools and
+# clang of 23.1.1 import. clang reads the version of Visual Studio with
+# version.dll.
 set(macos_libraries /usr/lib/libSystem.B.dylib /usr/lib/libc++.1.dylib)
 set(windows_libraries advapi32.dll crypt32.dll kernel32.dll ntdll.dll
-    oleaut32.dll winhttp.dll)
+    oleaut32.dll version.dll winhttp.dll)
 set(linux_formats_x86_64 elf64-x86-64)
 set(linux_formats_aarch64 elf64-littleaarch64)
 set(macos_formats_x86_64 "mach-o 64-bit x86-64")
