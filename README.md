@@ -34,12 +34,16 @@ alone.
 
 `SHA256SUMS.sig` is signed by the release key of `release@anti-lang.com`, an ECDSA
 P-256 key that signs nothing else. Its public key in PEM form is `keys/release.pem` in
-this repository and https://anti-lang.com/keys/release.asc on the site. The SHA-256
+this repository and https://anti-lang.com/keys/release.pem on the site. The SHA-256
 digest of the public key in DER form is its fingerprint:
 
 ```text
 7e64c56e26a42946823a66aa1f30bf686b6b5dbd0dc0e2c165a080540ffc3eca
 ```
+
+https://anti-lang.com/keys/release.asc serves a copy of the same PEM file until the
+next release is out. That address held the GPG key of the first release, and the copy
+goes away with the next release.
 
 openssl checks a download, and macOS, Linux and Git for Windows carry it. The first
 command prints the fingerprint above.
