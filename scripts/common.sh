@@ -47,7 +47,9 @@ recipe_path() {
 
 version=$(cat "$root/pins/llvm-version")
 build_number=$(cat "$root/pins/build-number")
-tag="$version-$build_number"
+# DESIGN: the tag names the LLVM version, whose build it is, and a counter
+# of the rebuilds of that version, as in 23.1.1-anti.1.
+tag="$version-anti.$build_number"
 
 # The file name of the archive of <host>.
 archive_name() {

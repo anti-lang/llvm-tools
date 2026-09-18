@@ -3,12 +3,14 @@
 #
 #   scripts/release.sh
 #
-# Tags the recipe commit that the archives name as <version>-<build> and
-# pushes the tag to origin. Writes SHA256SUMS, signs it with the key of
-# keys/release.asc into SHA256SUMS.sig, checks the signature, and uploads
-# the archives and both files. It then downloads the release again and
-# compares every file. GH_REPO names the repository on GitHub. Without it
-# the path of the origin remote does.
+# Tags the recipe commit that the archives name as <version>-anti.<build>
+# and pushes the tag to origin. Writes SHA256SUMS and signs it into
+# SHA256SUMS.sig with the private key that RELEASE_KEY names. Without
+# RELEASE_KEY it takes a SHA256SUMS.sig made on the machine that holds the
+# key. It checks the signature against keys/release.pem and uploads the
+# archives and both files. It then downloads the release again and compares
+# every file. GH_REPO names the repository on GitHub. Without it the path
+# of the origin remote does.
 . "$(dirname "$0")/common.sh"
 
 [ "$#" -eq 0 ] || die "usage: scripts/release.sh"
@@ -41,18 +43,29 @@ done
 (cd "$dist" && for file in $files; do basename "$file"; done | sort |
     xargs shasum -a 256 > SHA256SUMS)
 
-fingerprint=$(gpg --show-keys --with-colons "$root/keys/release.asc" |
-    awk -F: '$1 == "fpr" { print $10; exit }')
-[ -n "$fingerprint" ] || die "keys/release.asc holds no key"
-rm -f "$dist/SHA256SUMS.sig"
-gpg --local-user "$fingerprint" --detach-sign \
-    --output "$dist/SHA256SUMS.sig" "$dist/SHA256SUMS"
-keyring=$(mktemp "${TMPDIR:-/tmp}/llvm-tools-key.XXXXXX")
-readback=$(mktemp -d "${TMPDIR:-/tmp}/llvm-tools-release.XXXXXX")
-trap 'rm -rf "$keyring" "$readback"' EXIT
-gpg --dearmor < "$root/keys/release.asc" > "$keyring"
-gpgv --keyring "$keyring" "$dist/SHA256SUMS.sig" "$dist/SHA256SUMS" ||
-    die "SHA256SUMS.sig does not verify against keys/release.asc"
+# DESIGN: openssl signs and checks, because macOS, every Linux and Git for
+# Windows carry it. The signature is ECDSA P-256 over the SHA-256 digest of
+# SHA256SUMS, which the LibreSSL of macOS verifies with pkeyutl as well.
+public="$root/keys/release.pem"
+fingerprint=$(openssl pkey -pubin -in "$public" -outform DER |
+    openssl dgst -sha256 | sed 's/^.*= //')
+[ -n "$fingerprint" ] || die "keys/release.pem holds no public key"
+work=$(mktemp -d "${TMPDIR:-/tmp}/llvm-tools-release.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+openssl dgst -sha256 -binary -out "$work/SHA256SUMS.sha256" "$dist/SHA256SUMS"
+if [ -n "${RELEASE_KEY:-}" ]; then
+    openssl pkeyutl -sign -inkey "$RELEASE_KEY" -in "$work/SHA256SUMS.sha256" \
+        -out "$dist/SHA256SUMS.sig"
+elif [ ! -f "$dist/SHA256SUMS.sig" ]; then
+    die "SHA256SUMS.sig is missing. Set RELEASE_KEY to the private key, or
+sign $dist/SHA256SUMS on the machine that holds the key:
+    openssl dgst -sha256 -binary -out SHA256SUMS.sha256 SHA256SUMS
+    openssl pkeyutl -sign -inkey release-key.pem -in SHA256SUMS.sha256 -out SHA256SUMS.sig
+and put SHA256SUMS.sig beside SHA256SUMS in $dist."
+fi
+openssl pkeyutl -verify -pubin -inkey "$public" -in "$work/SHA256SUMS.sha256" \
+    -sigfile "$dist/SHA256SUMS.sig" >/dev/null 2>&1 ||
+    die "SHA256SUMS.sig does not verify against keys/release.pem"
 
 # The tag goes on the recipe commit. One that origin already holds must
 # name the same commit, which lets a run that failed after the push resume.
@@ -62,7 +75,7 @@ if [ -n "$remote" ]; then
         die "origin has the tag $tag on $remote, and the archives name $commit"
 else
     if ! git -C "$root" rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-        git -C "$root" tag -a "$tag" -m "LLVM $version, build $build_number" \
+        git -C "$root" tag -a "$tag" -m "LLVM $version, anti build $build_number" \
             "$commit"
     fi
     [ "$(git -C "$root" rev-parse "$tag^{commit}")" = "$commit" ] ||
@@ -73,13 +86,14 @@ fi
 # gh uploads the assets to a draft and publishes it after the last one. A
 # failed upload leaves no published release with missing files.
 gh release create "$tag" --repo "$repo" --verify-tag \
-    --title "LLVM $version, build $build_number" \
-    --notes "The five LLVM tools of LLVM $version for the six hosts of antic, built from the recipe at $commit. SHA256SUMS.sig is signed by the key $fingerprint." \
+    --title "LLVM $version, anti build $build_number" \
+    --notes "The five LLVM tools of LLVM $version for six hosts, built from the recipe at $commit. SHA256SUMS.sig is an ECDSA P-256 signature over the SHA-256 digest of SHA256SUMS, by the key of release@anti-lang.com in keys/release.pem, whose SHA-256 fingerprint is $fingerprint." \
     $files "$dist/SHA256SUMS" "$dist/SHA256SUMS.sig"
 
-gh release download "$tag" --repo "$repo" --dir "$readback"
+mkdir "$work/readback"
+gh release download "$tag" --repo "$repo" --dir "$work/readback"
 for file in $files "$dist/SHA256SUMS" "$dist/SHA256SUMS.sig"; do
-    cmp -s "$file" "$readback/$(basename "$file")" ||
+    cmp -s "$file" "$work/readback/$(basename "$file")" ||
         die "$(basename "$file") on GitHub differs from $file"
 done
 printf '%s holds the release %s, and every file matches\n' "$repo" "$tag"

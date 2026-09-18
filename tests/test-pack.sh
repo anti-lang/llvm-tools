@@ -27,7 +27,7 @@ dist=$(recipe_path "$copy" linux-x86_64 dist)
 
 fake_build linux-x86_64 yes "$commit"
 "$copy/scripts/pack.sh" linux-x86_64 >/dev/null
-archive="$dist/llvm-tools-$version-$build-linux-x86_64.tar.xz"
+archive="$dist/llvm-tools-$version-anti.$build-linux-x86_64.tar.xz"
 [ -f "$archive" ] || fail "$archive was not written"
 listing=$(tar -tJf "$archive" | sort | tr '\n' ' ')
 expected="VERSION bin/ bin/lld bin/llvm-ar bin/llvm-mc bin/llvm-objdump bin/llvm-readobj licenses/ licenses/llvm.txt licenses/musl.txt "
@@ -42,7 +42,7 @@ cmp -s "$work/licenses/llvm.txt" "$copy/licenses/llvm.txt" ||
 # A Windows archive holds .exe files and no musl licence.
 fake_build windows-arm64 yes "$commit"
 "$copy/scripts/pack.sh" windows-arm64 >/dev/null
-listing=$(tar -tJf "$dist/llvm-tools-$version-$build-windows-arm64.tar.xz" |
+listing=$(tar -tJf "$dist/llvm-tools-$version-anti.$build-windows-arm64.tar.xz" |
     sort | tr '\n' ' ')
 expected="VERSION bin/ bin/lld.exe bin/llvm-ar.exe bin/llvm-mc.exe bin/llvm-objdump.exe bin/llvm-readobj.exe licenses/ licenses/llvm.txt "
 [ "$listing" = "$expected" ] || fail "the Windows archive holds: $listing"

@@ -7,44 +7,47 @@ GitHub release. `antic` downloads the archive of its host and nothing else from 
 
 ## Releases
 
-A release tag is `<version>-<build>`, as in `23.1.1-1`. The version is the LLVM
-release, and the build number counts the recipes that built it. A rebuild of the same
-LLVM version with a changed recipe takes the next build number. An archive under a
-published tag is never replaced.
+A release tag is `<version>-anti.<build>`, as in `23.1.1-anti.1`: the LLVM version,
+whose build it is, and a counter of the rebuilds of that version. A rebuild of the same
+LLVM version with a changed recipe takes the next build number in `pins/build-number`.
+An archive under a published tag is never replaced.
 
 Each release holds these files.
 
 | File | Contents |
 |---|---|
-| `llvm-tools-<version>-<build>-<host>.tar.xz` | `bin/` with the five tools, `licenses/`, `VERSION` |
+| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the five tools, `licenses/`, `VERSION` |
 | `SHA256SUMS` | The SHA-256 digest of each archive |
-| `SHA256SUMS.sig` | A detached OpenPGP signature of `SHA256SUMS` |
+| `SHA256SUMS.sig` | An ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS` |
 
 `VERSION` names the LLVM version, the build number and the commit of the recipe.
 
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
-`windows-x86_64` and `windows-arm64`. The Linux tools link musl, libc++ and zlib
+`windows-x86_64` and `windows-arm64`. `antic` supports five of them. The
+`macos-x86_64` archive is built and published, and no installer or package of `antic`
+downloads it. The Linux tools link musl, libc++ and zlib
 statically and name no shared library. The macOS tools name `libSystem` and `libc++`
 of the system. The Windows tools link the CRT statically and import system DLLs
 alone.
 
 ## Signing key
 
-`SHA256SUMS.sig` is signed by this key.
+`SHA256SUMS.sig` is signed by the release key of `release@anti-lang.com`, an ECDSA
+P-256 key that signs nothing else. Its public key in PEM form is `keys/release.pem` in
+this repository and https://anti-lang.com/keys/release.asc on the site. The SHA-256
+digest of the public key in DER form is its fingerprint:
 
 ```text
-pub   ed25519 2026-09-07 [SC]
-      6101 BC28 AF32 AA35 7B54  316E 8E0D 8ADA ADFC 8154
-uid   Eddie Niese <eniese@gmail.com>
+7e64c56e26a42946823a66aa1f30bf686b6b5dbd0dc0e2c165a080540ffc3eca
 ```
 
-The public key is `keys/release.asc` in this repository and
-https://anti-lang.com/keys/release.asc on the site. Check a download with these
-commands.
+openssl checks a download, and macOS, Linux and Git for Windows carry it. The first
+command prints the fingerprint above.
 
 ```sh
-gpg --dearmor < release.asc > release.gpg
-gpgv --keyring ./release.gpg SHA256SUMS.sig SHA256SUMS
+openssl pkey -pubin -in release.pem -outform DER | openssl dgst -sha256
+openssl dgst -sha256 -binary -out SHA256SUMS.sha256 SHA256SUMS
+openssl pkeyutl -verify -pubin -inkey release.pem -in SHA256SUMS.sha256 -sigfile SHA256SUMS.sig
 shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
@@ -66,7 +69,7 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | `scripts/run-remote.sh` | Runs a tool of another system over ssh, for the version check |
 | `scripts/common.sh` | The TOML readers and names that the scripts share |
 | `licenses/` | The licence texts that the archives carry |
-| `keys/release.asc` | The public key that verifies `SHA256SUMS.sig` |
+| `keys/release.pem` | The public key that verifies `SHA256SUMS.sig` |
 | `tests/` | The tests of the recipe and the scripts |
 | `docs/reports/` | The report of each release |
 
@@ -106,7 +109,10 @@ scripts/release.sh
 ```
 
 `scripts/release.sh` needs `gh` logged in to an account that can write releases of
-`anti-lang/llvm-tools`, and the secret key of the fingerprint above.
+`anti-lang/llvm-tools`. `RELEASE_KEY` names the private key, and the script signs with
+it. The key stays off the development machine, so `SHA256SUMS.sig` can also come from
+the machine that holds it. A run without either writes `SHA256SUMS`, stops and prints
+the two commands that sign it there.
 
 ## Tests
 
