@@ -686,6 +686,8 @@ set(CMAKE_LIPO \"${rel}/llvm-lipo\" CACHE FILEPATH \"\")
 set(CMAKE_C_FLAGS_INIT \"${prefix_map}\")
 set(CMAKE_CXX_FLAGS_INIT \"${prefix_map} -nostdinc++ -isystem ${sysroot}/usr/include/c++/v1\")
 set(CMAKE_EXE_LINKER_FLAGS_INIT \"-fuse-ld=lld -Wl,-S\")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT \"-fuse-ld=lld\")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT \"-fuse-ld=lld\")
 ")
     else()
         # DESIGN: WinMsvc.cmake of the LLVM source is the cross toolchain
@@ -722,6 +724,10 @@ set(builtins_options
 # builtins. A Linux target also gets the start files of compiler-rt, which
 # clang takes when it links for musl. The macOS builtins are one universal
 # archive for both processors, which the arm64 host builds.
+#
+# DESIGN: macOS also gets the runtimes of AddressSanitizer and
+# UndefinedBehaviorSanitizer. antic runs its sanitizer builds on the Mac
+# with the pinned clang, and that clang links nothing it does not carry.
 function(build_builtins host)
     setup_host("${host}")
     if(host STREQUAL "macos-x86_64")
@@ -740,8 +746,11 @@ function(build_builtins host)
     if(os STREQUAL "macos")
         string(APPEND cache_text
             "set(DARWIN_osx_ARCHS \"arm64;x86_64\" CACHE STRING \"\" FORCE)\n"
-            "set(DARWIN_osx_BUILTIN_ARCHS \"arm64;x86_64\" CACHE STRING \"\" FORCE)\n")
-        list(APPEND options -DCOMPILER_RT_ENABLE_IOS=OFF
+            "set(DARWIN_osx_BUILTIN_ARCHS \"arm64;x86_64\" CACHE STRING \"\" FORCE)\n"
+            # compiler-rt adds ubsan whenever it builds a sanitizer.
+            "set(COMPILER_RT_SANITIZERS_TO_BUILD \"asan\" CACHE STRING \"\" FORCE)\n")
+        list(APPEND options -DCOMPILER_RT_BUILD_SANITIZERS=ON
+             -DCOMPILER_RT_ENABLE_IOS=OFF
              -DCOMPILER_RT_ENABLE_WATCHOS=OFF -DCOMPILER_RT_ENABLE_TVOS=OFF
              -DCOMPILER_RT_ENABLE_XROS=OFF
              "-DDARWIN_macosx_CACHED_SYSROOT=${sysroot}"
@@ -795,16 +804,19 @@ function(check_builtins)
         endif()
         message(STATUS "${name}: ${format}")
     endforeach()
-    execute_process(COMMAND "${release_bin}/llvm-lipo" -archs
-                            "${lib}/darwin/libclang_rt.osx.a"
-                    OUTPUT_VARIABLE archs OUTPUT_STRIP_TRAILING_WHITESPACE
-                    RESULT_VARIABLE status)
-    string(REPLACE " " ";" archs "${archs}")
-    list(SORT archs)
-    if(NOT status EQUAL 0 OR NOT archs STREQUAL "arm64;x86_64")
-        message(FATAL_ERROR "darwin/libclang_rt.osx.a holds '${archs}', not arm64 and x86_64")
-    endif()
-    message(STATUS "darwin/libclang_rt.osx.a: ${archs}")
+    foreach(name libclang_rt.osx.a libclang_rt.asan_osx_dynamic.dylib
+            libclang_rt.ubsan_osx_dynamic.dylib)
+        execute_process(COMMAND "${release_bin}/llvm-lipo" -archs
+                                "${lib}/darwin/${name}"
+                        OUTPUT_VARIABLE archs OUTPUT_STRIP_TRAILING_WHITESPACE
+                        RESULT_VARIABLE status)
+        string(REPLACE " " ";" archs "${archs}")
+        list(SORT archs)
+        if(NOT status EQUAL 0 OR NOT archs STREQUAL "arm64;x86_64")
+            message(FATAL_ERROR "darwin/${name} holds '${archs}', not arm64 and x86_64")
+        endif()
+        message(STATUS "darwin/${name}: ${archs}")
+    endforeach()
 endfunction()
 
 if(STEP STREQUAL "builtins")
