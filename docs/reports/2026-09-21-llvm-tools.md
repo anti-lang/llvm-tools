@@ -1,7 +1,9 @@
-# LLVM tools 23.1.1-1
+# LLVM tools 23.1.1-anti.1
 
-Release `23.1.1-1` holds the five tools for six hosts, built from recipe commit
-`9ca585f`. `antic` pins it and passes all 404 tests with the downloaded tools.
+Release `23.1.1-anti.1` holds the five tools for six hosts, built from recipe commit
+`9ca585f`. `antic` pins it and passes all 404 tests with the downloaded tools. It first
+went out as `23.1.1-1`, signed with GPG. That release and its tag are deleted, and the
+same six archives are published again under the new tag with an openssl signature.
 
 ## Recipe as built
 
@@ -57,8 +59,10 @@ llvm-objdump: LLVM version 23.1.1
 llvm-readobj: LLVM version 23.1.1
 ```
 
-`SHA256SUMS.sig` verifies with `gpgv` against the key served at
-`https://anti-lang.com/keys/release.asc`. In `antic`, all 12 cross links and all 120
+`SHA256SUMS.sig` is an ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS`,
+by the release key of `release@anti-lang.com`. `openssl pkeyutl -verify` accepts it
+against `keys/release.pem` with LibreSSL 3.3.6 of macOS, OpenSSL 3.5.5 on the Linux VM
+and OpenSSL 3.5.7 of Git for Windows. In `antic`, all 12 cross links and all 120
 assembly tests pass with the downloaded tools, 2 and 20 per target.
 
 ## Deviations and choices
@@ -70,11 +74,12 @@ assembly tests pass with the downloaded tools, 2 and 20 per target.
 - Added beyond the layout: `pins/sysroot.toml`, `pins/zlib.toml`, `pins/build-number`,
   `keys/release.asc`, `scripts/common.sh`, `scripts/run-remote.sh` and `tests/`.
 - `ACCEPT_LICENSE=yes` accepted the Microsoft terms for xwin, as the work order asks.
-- The `antic` installers check `SHA256SUMS.sig` where `gpgv` exists. A Mac has no
-  GnuPG, and there the pinned digest alone checks the archive. `get-llvm.cmake`
-  requires `gpgv`.
-- `antic` `docs/decisions.md` says macos-x86_64 gets no LLVM build. The work order asks
-  for six archives, so it has one, and the entry now says so.
+- The release key is ECDSA P-256, because LibreSSL 3.3.6 of macOS has no Ed25519. Its
+  fingerprint is the SHA-256 digest of the public key in DER form, in the README.
+- The private key stays off the development machine. `scripts/release.sh` signs with
+  the file in `RELEASE_KEY`, or takes a `SHA256SUMS.sig` made where the key is.
+- The `macos-x86_64` archive is built and published, and `antic` does not support it.
+  No path in `antic` downloads it.
 
 ## Not done
 
