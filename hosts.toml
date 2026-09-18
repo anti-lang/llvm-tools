@@ -1,0 +1,43 @@
+# The hosts that antic runs on, named as its targets. A table gives the
+# triple of the host and the machine that builds it. It also gives the kind
+# of sysroot from pins/sysroot.toml and the CMake options of the host.
+# build-llvm.cmake and scripts/common.sh read the tables.
+
+# The five tools that every archive holds.
+tools = ["lld", "llvm-mc", "llvm-ar", "llvm-objdump", "llvm-readobj"]
+
+[linux-x86_64]
+triple = "x86_64-unknown-linux-musl"
+built-on = "macos-arm64"
+sysroot = "musl"
+flags = []
+
+[linux-arm64]
+triple = "aarch64-unknown-linux-musl"
+built-on = "macos-arm64"
+sysroot = "musl"
+flags = []
+
+[macos-arm64]
+triple = "arm64-apple-darwin"
+built-on = "macos-arm64"
+sysroot = "macos-sdk"
+flags = ["-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"]
+
+[macos-x86_64]
+triple = "x86_64-apple-darwin"
+built-on = "macos-arm64"
+sysroot = "macos-sdk"
+flags = ["-DCMAKE_OSX_ARCHITECTURES=x86_64", "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"]
+
+[windows-x86_64]
+triple = "x86_64-pc-windows-msvc"
+built-on = "macos-arm64"
+sysroot = "xwin"
+flags = ["-DHOST_ARCH=x86_64"]
+
+[windows-arm64]
+triple = "aarch64-pc-windows-msvc"
+built-on = "macos-arm64"
+sysroot = "xwin"
+flags = ["-DHOST_ARCH=aarch64"]

@@ -1,0 +1,124 @@
+# llvm-tools
+
+The five LLVM tools that Anti ships, built for every host from the pinned LLVM source:
+`llvm-mc`, `lld`, `llvm-ar`, `llvm-objdump` and `llvm-readobj`. The compiler is clang
+of the pinned LLVM release. Each host gets one archive, published as an asset of a
+GitHub release. `antic` downloads the archive of its host and nothing else from LLVM.
+
+## Releases
+
+A release tag is `<version>-<build>`, as in `23.1.1-1`. The version is the LLVM
+release, and the build number counts the recipes that built it. A rebuild of the same
+LLVM version with a changed recipe takes the next build number. An archive under a
+published tag is never replaced.
+
+Each release holds these files.
+
+| File | Contents |
+|---|---|
+| `llvm-tools-<version>-<build>-<host>.tar.xz` | `bin/` with the five tools, `licenses/`, `VERSION` |
+| `SHA256SUMS` | The SHA-256 digest of each archive |
+| `SHA256SUMS.sig` | A detached OpenPGP signature of `SHA256SUMS` |
+
+`VERSION` names the LLVM version, the build number and the commit of the recipe.
+
+The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
+`windows-x86_64` and `windows-arm64`. The Linux tools link musl, libc++ and zlib
+statically and name no shared library. The macOS tools name `libSystem` and `libc++`
+of the system. The Windows tools link the CRT statically and import system DLLs
+alone.
+
+## Signing key
+
+`SHA256SUMS.sig` is signed by this key.
+
+```text
+pub   ed25519 2026-09-07 [SC]
+      6101 BC28 AF32 AA35 7B54  316E 8E0D 8ADA ADFC 8154
+uid   Eddie Niese <eniese@gmail.com>
+```
+
+The public key is `keys/release.asc` in this repository and
+https://anti-lang.com/keys/release.asc on the site. Check a download with these
+commands.
+
+```sh
+gpg --dearmor < release.asc > release.gpg
+gpgv --keyring ./release.gpg SHA256SUMS.sig SHA256SUMS
+shasum -a 256 -c --ignore-missing SHA256SUMS
+```
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `build-llvm.cmake` | The recipe, which builds one host |
+| `hosts.toml` | Per host: triple, build machine, sysroot kind, CMake options |
+| `pins/llvm-version` | The LLVM version |
+| `pins/source.sha256` | The SHA-256 digest of the LLVM source archive |
+| `pins/release.toml` | Per build machine: the LLVM release archive, its digest and its attestation |
+| `pins/sysroot.toml` | The musl packages, the macOS SDK and the xwin versions |
+| `pins/zlib.toml` | The zlib source |
+| `pins/build-number` | The build number of the next release |
+| `scripts/build.sh` | Runs the recipe for one host on this machine |
+| `scripts/pack.sh` | Packs the tools of one host with the licences |
+| `scripts/release.sh` | Tags, signs and uploads a release |
+| `scripts/run-remote.sh` | Runs a tool of another system over ssh, for the version check |
+| `scripts/common.sh` | The TOML readers and names that the scripts share |
+| `licenses/` | The licence texts that the archives carry |
+| `keys/release.asc` | The public key that verifies `SHA256SUMS.sig` |
+| `tests/` | The tests of the recipe and the scripts |
+| `docs/reports/` | The report of each release |
+
+Everything the recipe downloads and builds stays under `build/`.
+
+## Building a release
+
+The recipe needs CMake 3.25 or newer, Ninja, `gh` for the Sigstore attestation of the
+release archive, and `xwin` 0.10.0 for the Windows hosts. Run the builds on the machine
+that `hosts.toml` names for each host.
+
+The recipe runs every tool it builds. A Linux or Windows tool runs over ssh on the
+machine that `LINUX_REMOTE` or `WINDOWS_REMOTE` names. The Linux machine needs
+`qemu-x86_64` through binfmt when its processor is arm64. `REMOTE_SSH_OPTIONS` passes
+options to ssh and scp.
+
+```sh
+export LINUX_REMOTE=eddie@192.168.60.131 WINDOWS_REMOTE=eddie@192.168.60.132
+scripts/build.sh macos-arm64
+scripts/build.sh macos-x86_64
+scripts/build.sh linux-x86_64
+scripts/build.sh linux-arm64
+ACCEPT_LICENSE=yes scripts/build.sh windows-x86_64
+ACCEPT_LICENSE=yes scripts/build.sh windows-arm64
+```
+
+`ACCEPT_LICENSE=yes` accepts the licence terms of the Microsoft CRT and Windows SDK,
+which xwin downloads. Commit the recipe before the builds that go into a release,
+because `scripts/pack.sh` refuses a build of uncommitted files. Then pack each host and
+publish.
+
+```sh
+for host in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64 windows-x86_64 windows-arm64; do
+    scripts/pack.sh "$host"
+done
+scripts/release.sh
+```
+
+`scripts/release.sh` needs `gh` logged in to an account that can write releases of
+`anti-lang/llvm-tools`, and the secret key of the fingerprint above.
+
+## Tests
+
+```sh
+sh tests/run.sh
+```
+
+The tests of the library checks link small programs with the release clang, so they
+run after the first build has unpacked it.
+
+## Licence
+
+The recipe and the scripts are under the Apache License 2.0 with LLVM Exceptions, in
+`LICENSE`, the licence of LLVM itself. The archives carry the LLVM licence and, for
+Linux, the musl licence in `licenses/`.

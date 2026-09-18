@@ -1,0 +1,10 @@
+# The LLVM release archive of each build machine. Its clang, lld and
+# llvm-tblgen build the tools, and build-llvm.cmake checks the digest and
+# the Sigstore attestation of the archive before it unpacks it. A table is
+# named after the host that the build machine is. @VERSION@ stands for the
+# version in pins/llvm-version.
+
+[macos-arm64]
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-@VERSION@/LLVM-@VERSION@-macOS-ARM64.tar.xz"
+sha256 = "64220f1c99132ef7e580447781b84f96fbba6862a43a8f6522b423052cd67502"
+attestation = "https://github.com/llvm/llvm-project/releases/download/llvmorg-@VERSION@/LLVM-@VERSION@-macOS-ARM64.tar.xz.jsonl"

@@ -1,0 +1,32 @@
+# The sysroots that hosts.toml names. Each digest is the one of the file
+# at its first download.
+
+# musl 1.2.6 from the Alpine Linux 3.24 package musl-dev, the C library
+# that the runtime archive of antic carries for Linux. The tools link it
+# statically. The kernel headers of the package linux-headers 7.0.0 go
+# beside it, since libc++ and LLVM include linux/futex.h and others.
+[musl-x86_64]
+url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/musl-dev-1.2.6-r2.apk"
+sha256 = "6831e8b9e4821dae2c9121f0641f81e543f4ac27c03144c4876980ee84e6988f"
+headers-url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/linux-headers-7.0.0-r1.apk"
+headers-sha256 = "c4535f3f0dc6fd4d80efa7ff2a7a72a2d3f8dae31e2587c0785cc3243889cdf2"
+
+[musl-aarch64]
+url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/musl-dev-1.2.6-r2.apk"
+sha256 = "ca72b84f4eb3c36bbbec04d919eb10159d414c7a43413cc2253841d301fa9486"
+headers-url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-headers-7.0.0-r1.apk"
+headers-sha256 = "d61656e81116040ebac0bc8d9046a3ba97f01a00ee085809103576e8a437468f"
+
+# The SDK of the Command Line Tools. 26.5 is the newest that ld64.lld
+# 23.1.1 reads. It refuses the target arm64e.x1 in the stubs of 27.0.
+[macos-sdk]
+path = "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
+
+# The Microsoft CRT and Windows SDK, which xwin downloads at these
+# versions. The versions are the ones of the runtime archive of antic.
+# The digest covers the regular files of the tree that xwin writes.
+[xwin]
+version = "0.10.0"
+crt = "14.44.17.14"
+sdk = "10.0.26100"
+tree = "8d6540d83493909af67305354303d51ac0930c25d2793e909d8671133c6bd266"
