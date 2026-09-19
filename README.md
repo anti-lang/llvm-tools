@@ -116,8 +116,10 @@ whose two archives come from its build is not packed again, so `./r` can run aga
 a failure. `scripts/release.sh` writes `SHA256SUMS`, signs it with
 `keys/private/release-key.enc.pem` and checks the signature against
 `keys/public/release.pem`. openssl asks for the passphrase of the key. The script then
-tags the recipe commit, uploads the release and reads it back. It needs `gh` logged in to
-an account that can write releases of `anti-lang/llvm-tools`.
+tags the recipe commit and uploads each file, with a line each, to a draft that it
+publishes after the last one. It downloads each file again and prints `same` or
+`DIFFERS` for each. It needs `gh` logged in to an account that can write releases of
+`anti-lang/llvm-tools`.
 
 ## Tests
 
