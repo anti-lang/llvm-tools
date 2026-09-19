@@ -1,9 +1,8 @@
 # The pinned compiler, 23.1.1-anti.2
 
 Each of the six hosts now has a clang archive beside its tools archive. All twelve come
-from recipe commit `c621652`, one build of the pinned LLVM 23.1.1 source. The release
-`23.1.1-anti.2` waits for its signature: `scripts/release.sh` wrote `SHA256SUMS` and
-stops there, since the release key stays off this machine.
+from recipe commit `c621652`, one build of the pinned LLVM 23.1.1 source. Release
+`23.1.1-anti.2` holds them with `SHA256SUMS` and its signature, and antic pins it.
 
 ## Recipe
 
@@ -40,11 +39,10 @@ All six build on the Mac. Windows cross-built again. Sizes are in bytes.
 | `windows-x86_64` | `coff-x86-64`, system DLLs | Windows VM, x64 emulation |
 | `windows-arm64` | `coff-arm64`, system DLLs | Windows VM |
 
-Every clang prints `clang version 23.1.1`, and every tool its version as before. The five
-tools of both macOS hosts record `minos 11.0` as well. The builtins check their format
-per target, and the macOS archives hold arm64 and x86_64. A clang in the layout of the
-archive linked static musl programs for both Linux processors that ran on the Linux VM.
-It also linked ASan and UBSan programs on the Mac that caught their faults.
+Every clang prints `clang version 23.1.1`, and the five tools of both macOS hosts
+record `minos 11.0`. The builtins check their format per target. The archived clang
+linked static musl programs that ran on the Linux VM, and ASan and UBSan programs on the
+Mac that caught their faults.
 
 ## Choices
 
@@ -57,9 +55,25 @@ It also linked ASan and UBSan programs on the Mac that caught their faults.
 - On Linux, clang compiles for glibc by default and for musl with `--target`.
 - `version.dll` joins the system set of Windows, because clang.exe imports it.
 
+## Release
+
+`./c` builds every host and `./r` publishes. `./r` signs with
+`keys/private/release-key.enc.pem` and checks against `keys/public/release.pem`, which
+the site serves at `keys/release.pem`. It published the 14 files on 2026-09-19 and found
+each download identical. The tag names `c621652`.
+
+## Checks of the release
+
+- A fresh clone of antic downloaded both archives of `macos-arm64` from the release and
+  checked each against its pin and the signature. Its cache names
+  `build/clang/bin/clang` as `CMAKE_C_COMPILER`. The full suite passed 408 of 408, and
+  ASan and UBSan passed 407 of 407 each.
+- The LLVM step of `install.sh` took the tools of `23.1.1-anti.2` on the Mac and the
+  Linux VM, and that of `install.ps1` on the Windows VM, for all six hosts. The x86_64
+  ones ran under Rosetta, qemu and x64 emulation. Each `llvm-mc` printed 23.1.1. A copy
+  of each installer with another key refused the release and installed nothing.
+
 ## Not done
 
-- The release. It needs the signature of `SHA256SUMS`, and the key is the owner's.
-- The fresh checkout of antic that downloads both archives, and the installer runs on
-  the VMs and the Mac. Both need the published release.
-- Release `23.1.1-anti.1` is still published. The owner deletes it.
+- Release `23.1.1-anti.1` is still published. Nothing pins it, so it goes next.
+- `23.1.1-anti.3` adds the sanitizer runtimes of Linux and Windows.
