@@ -14,9 +14,9 @@
 # system set of its host, and one that reports another version. It then
 # writes build/<host>/recipe, which scripts/pack.sh reads.
 #
-# STEP=builtins builds the compiler-rt builtins of the six targets into
-# build/builtins, which every clang archive carries, and writes
-# build/builtins/recipe.
+# STEP=builtins builds the compiler-rt builtins of the six targets and the
+# sanitizer runtimes into build/builtins, which every clang archive
+# carries, and writes build/builtins/recipe.
 #
 # RUNNER is a command that runs a binary of another operating system.
 # ACCEPT_LICENSE=yes lets xwin download the Microsoft CRT and Windows SDK
@@ -29,6 +29,9 @@
 #   fetch-file              download URL to FILE and check SHA256
 #   check-libraries         check the shared libraries of the binaries in BIN
 #   check-version           check the version the binaries in BIN report
+#   check-builtins          check the compiler-rt runtimes in BUILTINS, the
+#                           lib directory of a resource directory
+#   glibc-sysroot           unpack the glibc sysroot of ARCH and print it
 cmake_minimum_required(VERSION 3.25)
 
 # DESIGN: every path of the build tree is defined here once. The scripts
@@ -246,7 +249,7 @@ function(setup_host host)
     endforeach()
 endfunction()
 
-if(NOT STEP STREQUAL "builtins")
+if(NOT STEP MATCHES "^((check-)?builtins|glibc-sysroot)$")
     # Every other step works on one host.
     if(NOT HOST IN_LIST HOSTS)
         message(FATAL_ERROR "HOST is '${HOST}', and hosts.toml names ${HOSTS}")
@@ -435,7 +438,7 @@ if(STEP STREQUAL "check-libraries")
 elseif(STEP STREQUAL "check-version")
     check_version("${BIN}")
     return()
-elseif(NOT STEP STREQUAL "all" AND NOT STEP STREQUAL "builtins")
+elseif(NOT STEP MATCHES "^(all|builtins|check-builtins|glibc-sysroot)$")
     message(FATAL_ERROR "STEP is '${STEP}', which the recipe does not know")
 endif()
 
@@ -502,6 +505,46 @@ function(prepare_source)
     fetch("https://github.com/llvm/llvm-project/releases/download/llvmorg-${version}/${source_asset}"
           "${downloads}/${source_asset}" "${source_sha256}")
     unpack("${downloads}/${source_asset}" "${source}" "${source_sha256}" TOP)
+endfunction()
+
+# Unpack the glibc sysroot of <arch>, x86_64 or aarch64, and set <out> to
+# its directory. Three packages of Ubuntu 22.04 make it: libc6-dev,
+# libc6 and linux-libc-dev. A package is an ar archive whose data.tar.zst
+# holds the files.
+function(prepare_glibc arch out)
+    set(dir "${sysroot_root}/glibc-${arch}")
+    set(digests "")
+    set(debs "")
+    foreach(package libc-dev libc headers)
+        toml_get("${pins}/sysroot.toml" "glibc-${arch}" "${package}-url" url)
+        toml_get("${pins}/sysroot.toml" "glibc-${arch}" "${package}-sha256" digest)
+        get_filename_component(asset "${url}" NAME)
+        fetch("${url}" "${downloads}/${arch}/${asset}" "${digest}")
+        list(APPEND debs "${downloads}/${arch}/${asset}")
+        string(APPEND digests "${digest} ")
+    endforeach()
+    # The three packages unpack into one tree, so the stamp names all three.
+    set(done "")
+    if(EXISTS "${dir}/.unpacked")
+        file(READ "${dir}/.unpacked" done)
+    endif()
+    if(NOT done STREQUAL "${digests}\n")
+        message(STATUS "unpack the sysroot ${dir}")
+        file(REMOVE_RECURSE "${dir}" "${dir}.deb")
+        foreach(deb IN LISTS debs)
+            file(REMOVE_RECURSE "${dir}.deb")
+            file(ARCHIVE_EXTRACT INPUT "${deb}" DESTINATION "${dir}.deb")
+            file(GLOB data "${dir}.deb/data.tar.*")
+            list(LENGTH data count)
+            if(NOT count EQUAL 1)
+                message(FATAL_ERROR "${deb} holds ${count} data archives, not one")
+            endif()
+            file(ARCHIVE_EXTRACT INPUT "${data}" DESTINATION "${dir}")
+        endforeach()
+        file(REMOVE_RECURSE "${dir}.deb")
+        file(WRITE "${dir}/.unpacked" "${digests}\n")
+    endif()
+    set(${out} "${dir}" PARENT_SCOPE)
 endfunction()
 
 # The sysroot of the host that setup_host named last.
@@ -709,6 +752,21 @@ include(\"${source}/llvm/cmake/platforms/WinMsvc.cmake\")
     file(WRITE "${file}" "${text}")
 endfunction()
 
+# The sanitizer runtimes that the clang archives carry beside the
+# builtins. Linux has the static ones, each with the symbol list that clang
+# hands the linker. Windows on x86_64 has ASan as a DLL and UBSan, and
+# Windows on arm64 has UBSan alone, since compiler-rt 23.1.1 builds ASan
+# for Windows on x86 alone. The macOS ones come with the Darwin builtins.
+set(linux_sanitizers asan asan_cxx asan_static asan-preinit ubsan_standalone
+    ubsan_standalone_cxx)
+set(linux_sanitizer_symbols asan asan_cxx ubsan_standalone ubsan_standalone_cxx)
+set(windows_x86_64_sanitizers clang_rt.asan_dynamic.dll
+    clang_rt.asan_dynamic.lib clang_rt.asan_dynamic_runtime_thunk.lib
+    clang_rt.asan_static_runtime_thunk.lib clang_rt.ubsan_standalone.lib
+    clang_rt.ubsan_standalone_cxx.lib)
+set(windows_arm64_sanitizers clang_rt.ubsan_standalone.lib
+    clang_rt.ubsan_standalone_cxx.lib)
+
 # The options of compiler-rt that build the builtins and nothing else.
 set(builtins_options
     -DCOMPILER_RT_BUILD_BUILTINS=ON
@@ -777,9 +835,79 @@ function(build_builtins host)
                 TARGETS install)
 endfunction()
 
+# The options of compiler-rt that build the sanitizer runtimes and no
+# builtins. compiler-rt adds UBSan whenever it builds a sanitizer, and
+# naming UBSan as well adds its directory twice. It skips ASan on a target
+# that has none, which leaves UBSan alone on Windows on arm64.
+set(sanitizer_options
+    -DCOMPILER_RT_BUILD_BUILTINS=OFF
+    -DCOMPILER_RT_BUILD_SANITIZERS=ON
+    -DCOMPILER_RT_SANITIZERS_TO_BUILD=asan
+    -DCOMPILER_RT_BUILD_XRAY=OFF
+    -DCOMPILER_RT_BUILD_LIBFUZZER=OFF
+    -DCOMPILER_RT_BUILD_PROFILE=OFF
+    -DCOMPILER_RT_BUILD_MEMPROF=OFF
+    -DCOMPILER_RT_BUILD_ORC=OFF
+    -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF
+    -DCOMPILER_RT_BUILD_GWP_ASAN=OFF
+    -DCOMPILER_RT_BUILD_CRT=OFF
+    -DCOMPILER_RT_INCLUDE_TESTS=OFF)
+
+# Build the sanitizer runtimes of <host> into the install tree of the
+# builtins. The macOS ones come with the Darwin builtins.
+#
+# DESIGN: on Linux the pinned clang compiles for glibc by default, so the
+# runtimes are those of <arch>-unknown-linux-gnu, built against glibc 2.35
+# of Ubuntu 22.04. They are the static ones, which clang links by default.
+# The per-target installs leave out the shared ones, which would link
+# against GCC's runtime, and the symbol lists, which the recipe copies.
+function(build_sanitizers host)
+    setup_host("${host}")
+    if(os STREQUAL "macos")
+        return()
+    endif()
+    set(work "${builtins_root}/${host}-sanitizers")
+    set(toolchain "${work}/toolchain.cmake")
+    set(options "-DCMAKE_TOOLCHAIN_FILE=${toolchain}" -DCMAKE_BUILD_TYPE=Release
+        -DLLVM_ENABLE_RUNTIMES=compiler-rt
+        "-DCMAKE_INSTALL_PREFIX=${builtins_install}"
+        "-DCOMPILER_RT_INSTALL_PATH=${builtins_install}/lib/clang/${major}"
+        -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON
+        -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON ${sanitizer_options})
+    if(os STREQUAL "linux")
+        prepare_glibc("${arch}" sysroot)
+        set(triple "${arch}-unknown-linux-gnu")
+        write_toolchain("${toolchain}" RUNTIMES)
+        list(APPEND options "-DLLVM_DEFAULT_TARGET_TRIPLE=${triple}")
+        set(targets "")
+        foreach(name IN LISTS linux_sanitizers)
+            list(APPEND targets "install-clang_rt.${name}-${arch}")
+        endforeach()
+        foreach(name IN LISTS linux_sanitizer_symbols)
+            list(APPEND targets "clang_rt.${name}-${arch}-symbols")
+        endforeach()
+        cmake_build("${work}/build" "${source}/runtimes" OPTIONS ${options}
+                    TARGETS ${targets})
+        foreach(name IN LISTS linux_sanitizer_symbols)
+            set(syms "${triple}/libclang_rt.${name}.a.syms")
+            file(COPY_FILE "${work}/build/compiler-rt/lib/${syms}"
+                 "${builtins_install}/lib/clang/${major}/lib/${syms}")
+        endforeach()
+    else()
+        write_toolchain("${toolchain}" RUNTIMES)
+        # compiler-rt reads the target of a default-target build from
+        # CMake, which WinMsvc.cmake gives clang-cl as a flag alone.
+        list(APPEND options ${host_flags} "-DLLVM_DEFAULT_TARGET_TRIPLE=${triple}"
+             "-DCMAKE_C_COMPILER_TARGET=${triple}"
+             "-DCMAKE_CXX_COMPILER_TARGET=${triple}"
+             "-DCMAKE_ASM_COMPILER_TARGET=${triple}")
+        cmake_build("${work}/build" "${source}/runtimes" OPTIONS ${options}
+                    TARGETS install)
+    endif()
+endfunction()
+
 # Refuse the builtins unless each target has its files, of its format.
-function(check_builtins)
-    set(lib "${builtins_install}/lib/clang/${major}/lib")
+function(check_builtins lib)
     set(objdump "${release_bin}/llvm-objdump")
     set(expect
         "x86_64-unknown-linux-musl/libclang_rt.builtins.a=elf64-x86-64"
@@ -790,17 +918,45 @@ function(check_builtins)
         "aarch64-unknown-linux-musl/clang_rt.crtend.o=elf64-littleaarch64"
         "x86_64-pc-windows-msvc/clang_rt.builtins.lib=coff-x86-64"
         "aarch64-pc-windows-msvc/clang_rt.builtins.lib=coff-arm64")
+    # DESIGN: the sanitizer runtimes of Linux are the static ones, which
+    # clang links by default. The shared ones would need GCC's crtbeginS.o,
+    # libgcc_s and libstdc++, which the glibc sysroot does not hold.
+    foreach(arch_format x86_64=elf64-x86-64 aarch64=elf64-littleaarch64)
+        string(REPLACE "=" ";" arch_format "${arch_format}")
+        list(GET arch_format 0 arch)
+        list(GET arch_format 1 format)
+        foreach(name IN LISTS linux_sanitizers)
+            list(APPEND expect
+                 "${arch}-unknown-linux-gnu/libclang_rt.${name}.a=${format}")
+        endforeach()
+    endforeach()
+    foreach(name IN LISTS windows_x86_64_sanitizers)
+        list(APPEND expect "x86_64-pc-windows-msvc/${name}=coff-x86-64")
+    endforeach()
+    foreach(name IN LISTS windows_arm64_sanitizers)
+        list(APPEND expect "aarch64-pc-windows-msvc/${name}=coff-arm64")
+    endforeach()
+    foreach(arch x86_64 aarch64)
+        foreach(name IN LISTS linux_sanitizer_symbols)
+            set(syms "${arch}-unknown-linux-gnu/libclang_rt.${name}.a.syms")
+            if(NOT EXISTS "${lib}/${syms}")
+                message(FATAL_ERROR "the runtimes lack ${syms}")
+            endif()
+        endforeach()
+    endforeach()
     foreach(row IN LISTS expect)
         string(REPLACE "=" ";" row "${row}")
         list(GET row 0 name)
         list(GET row 1 format)
         if(NOT EXISTS "${lib}/${name}")
-            message(FATAL_ERROR "the builtins lack ${name}")
+            message(FATAL_ERROR "the runtimes lack ${name}")
         endif()
         execute_process(COMMAND "${objdump}" -f "${lib}/${name}"
                         OUTPUT_VARIABLE headers RESULT_VARIABLE status)
         string(REGEX MATCHALL "file format [^\n]+" formats "${headers}")
         list(REMOVE_DUPLICATES formats)
+        # The stubs of an import library name no machine. Its objects do.
+        list(REMOVE_ITEM formats "file format COFF-import-file")
         if(NOT status EQUAL 0 OR NOT formats STREQUAL "file format ${format}")
             message(FATAL_ERROR "${name} holds ${formats}, not ${format}")
         endif()
@@ -821,6 +977,15 @@ function(check_builtins)
     endforeach()
 endfunction()
 
+if(STEP STREQUAL "check-builtins")
+    check_builtins("${BUILTINS}")
+    return()
+elseif(STEP STREQUAL "glibc-sysroot")
+    prepare_glibc("${ARCH}" glibc)
+    say("${glibc}")
+    return()
+endif()
+
 if(STEP STREQUAL "builtins")
     file(REMOVE "${builtins_stamp}")
     prepare_release()
@@ -828,8 +993,9 @@ if(STEP STREQUAL "builtins")
     file(REMOVE_RECURSE "${builtins_install}")
     foreach(host IN LISTS HOSTS)
         build_builtins("${host}")
+        build_sanitizers("${host}")
     endforeach()
-    check_builtins()
+    check_builtins("${builtins_install}/lib/clang/${major}/lib")
     write_stamp("${builtins_stamp}")
     message(STATUS "${builtins_install} holds the builtins of the six targets")
     return()

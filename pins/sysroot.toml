@@ -17,6 +17,26 @@ sha256 = "ca72b84f4eb3c36bbbec04d919eb10159d414c7a43413cc2253841d301fa9486"
 headers-url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-headers-7.0.0-r1.apk"
 headers-sha256 = "d61656e81116040ebac0bc8d9046a3ba97f01a00ee085809103576e8a437468f"
 
+# glibc 2.35 of Ubuntu 22.04 and its kernel headers, the sysroot of the
+# sanitizer runtimes of Linux. Ubuntu 22.04 is the oldest LTS in support,
+# so a runtime built against it runs on every newer glibc. The packages
+# come from the release pocket of jammy, whose files never change.
+[glibc-x86_64]
+libc-dev-url = "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-dev_2.35-0ubuntu3_amd64.deb"
+libc-dev-sha256 = "cc37cab5c60bcfe4bbf289a8002f369949a41ed46e8b51a0503a001099370c56"
+libc-url = "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.35-0ubuntu3_amd64.deb"
+libc-sha256 = "ea9a27e0ebdd0cfc9c750d94f8074f3a35d1f97dcc77ae04c370fb498a6b6db2"
+headers-url = "https://archive.ubuntu.com/ubuntu/pool/main/l/linux/linux-libc-dev_5.15.0-25.25_amd64.deb"
+headers-sha256 = "1b2a93020593c9e94a25f750ce442da5a6e8ff48a20f52cec92dfc3fa35336d8"
+
+[glibc-aarch64]
+libc-dev-url = "https://ports.ubuntu.com/ubuntu-ports/pool/main/g/glibc/libc6-dev_2.35-0ubuntu3_arm64.deb"
+libc-dev-sha256 = "2f254d6e843e413d549f407362885171c285f08383bb7e9392da855810ff78fd"
+libc-url = "https://ports.ubuntu.com/ubuntu-ports/pool/main/g/glibc/libc6_2.35-0ubuntu3_arm64.deb"
+libc-sha256 = "b1206b51690a810efc701e1d311e0ac5fd9a9f0f8e216585362512d805d261af"
+headers-url = "https://ports.ubuntu.com/ubuntu-ports/pool/main/l/linux/linux-libc-dev_5.15.0-25.25_arm64.deb"
+headers-sha256 = "ffbdfcd181d87b92c108cb49ca20e152c0688825b5a1aac9ecbc63391b348aeb"
+
 # The SDK of the Command Line Tools. 26.5 is the newest that ld64.lld
 # 23.1.1 reads. It refuses the target arm64e.x1 in the stubs of 27.0.
 [macos-sdk]

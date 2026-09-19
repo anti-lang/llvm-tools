@@ -4,8 +4,8 @@ The five LLVM tools that Anti ships, `llvm-mc`, `lld`, `llvm-ar`, `llvm-objdump`
 `llvm-readobj`, and the clang that builds Anti, for every host from the pinned LLVM
 source. The compiler that builds them is clang of the pinned LLVM release. Each host
 gets two archives, published as assets of a GitHub release: the tools, and clang with
-its built-in headers and the compiler-rt builtins of all six targets. `antic` downloads
-the archives of its host and nothing else from LLVM.
+its built-in headers, the compiler-rt builtins of all six targets and the sanitizer
+runtimes. `antic` downloads the archives of its host and nothing else from LLVM.
 
 ## Releases
 
@@ -19,7 +19,7 @@ Each release holds these files.
 | File | Contents |
 |---|---|
 | `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the five tools, `licenses/`, `VERSION` |
-| `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers and the builtins, `licenses/`, `VERSION` |
+| `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers, the builtins and the sanitizer runtimes, `licenses/`, `VERSION` |
 | `SHA256SUMS` | The SHA-256 digest of each archive |
 | `SHA256SUMS.sig` | An ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS` |
 
@@ -29,8 +29,15 @@ archive under one tag comes from one commit.
 The builtins lie where clang looks for them: `lib/clang/23/lib/<triple>/` for the two
 musl and the two MSVC targets, and one universal `lib/clang/23/lib/darwin/libclang_rt.osx.a`
 for both macOS processors. The musl targets also get `clang_rt.crtbegin.o` and
-`clang_rt.crtend.o`, and macOS gets the runtimes of ASan and UBSan. On Linux, clang compiles for glibc by default and for musl with
+`clang_rt.crtend.o`. On Linux, clang compiles for glibc by default and for musl with
 `--target`. There is no `clang++`, because nothing Anti ships is C++.
+
+The sanitizer runtimes of ASan and UBSan lie beside the builtins. macOS has both for
+both processors. Linux has the static ones for `x86_64-unknown-linux-gnu` and
+`aarch64-unknown-linux-gnu`, built against glibc 2.35 of Ubuntu 22.04, so they run on
+that glibc and every newer one. `windows-x86_64` has both, with ASan as a DLL.
+`windows-arm64` has UBSan alone, since compiler-rt 23.1.1 builds no ASan for Windows on
+arm64.
 
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
 `windows-x86_64` and `windows-arm64`. The Linux binaries link musl, libc++ and zlib
@@ -38,6 +45,11 @@ statically and name no shared library. The macOS binaries name `libSystem` and `
 of the system and record macOS 11.0 as their `minos`. The Windows binaries link the CRT
 statically and import system DLLs
 alone.
+
+## Changes
+
+- `23.1.1-anti.3`: the clang archives carry the sanitizer runtimes of Linux on glibc and
+  of Windows beside those of macOS.
 
 ## Signing key
 
