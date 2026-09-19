@@ -25,6 +25,13 @@ recipe_path() {
     recipe "$1" -DHOST="$2" -DSTEP=paths | sed -n "s/^$3=//p"
 }
 
+# Print the value of the variable <name> that scripts/common.sh sets in
+# the checkout in $1, which defines the paths of the scripts once.
+common_value() {
+    (cd "$1" && sh -c '. scripts/common.sh && eval "printf \"%s\\n\" \"\$$1\""' \
+        sh "$2")
+}
+
 # Expect the command to fail and its output to hold the text in $1.
 expect_refusal() {
     text=$1

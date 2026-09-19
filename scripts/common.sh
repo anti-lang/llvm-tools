@@ -1,11 +1,20 @@
-# Shared by the scripts under scripts/, which source it.
+# Shared by the scripts under scripts/ and the commands ./c and ./r, which
+# source it.
 #
 # The TOML files of this repository hold flat tables of strings and arrays
 # of strings on one line, and the readers below cover that subset. The
 # paths of the build tree come from build-llvm.cmake, which defines them.
 set -eu
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+# The commands lie at the top of the repository, the scripts one below it.
+root=$(cd "$(dirname "$0")" && pwd)
+[ -f "$root/hosts.toml" ] || root=$(dirname "$root")
+
+# The release key of release@anti-lang.com. git holds the public half. The
+# private half, encrypted with a passphrase, lies beside it, and git
+# ignores it.
+public_key="$root/keys/public/release.pem"
+private_key="$root/keys/private/release-key.enc.pem"
 
 die() {
     printf '%s: %s\n' "$(basename "$0")" "$*" >&2

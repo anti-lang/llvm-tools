@@ -42,8 +42,8 @@ alone.
 ## Signing key
 
 `SHA256SUMS.sig` is signed by the release key of `release@anti-lang.com`, an ECDSA
-P-256 key that signs nothing else. Its public key in PEM form is `keys/release.pem` in
-this repository and https://anti-lang.com/keys/release.pem on the site. The SHA-256
+P-256 key that signs nothing else. Its public key in PEM form is `keys/public/release.pem`
+in this repository and https://anti-lang.com/keys/release.pem on the site. The SHA-256
 digest of the public key in DER form is its fingerprint:
 
 ```text
@@ -64,6 +64,8 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 
 | Path | Contents |
 |---|---|
+| `c` | Builds the builtins and every host |
+| `r` | Packs every host and publishes the release |
 | `build-llvm.cmake` | The recipe, which builds one host |
 | `hosts.toml` | Per host: triple, build machine, sysroot kind, CMake options |
 | `pins/llvm-version` | The LLVM version |
@@ -78,7 +80,8 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | `scripts/run-remote.sh` | Runs a tool of another system over ssh, for the version check |
 | `scripts/common.sh` | The TOML readers and names that the scripts share |
 | `licenses/` | The licence texts that the archives carry |
-| `keys/release.pem` | The public key that verifies `SHA256SUMS.sig` |
+| `keys/public/release.pem` | The public key that verifies `SHA256SUMS.sig` |
+| `keys/private/` | The private release key, encrypted, which git ignores |
 | `tests/` | The tests of the recipe and the scripts |
 | `docs/reports/` | The report of each release |
 
@@ -91,38 +94,30 @@ release archive, and `xwin` 0.10.0 for the Windows hosts. Run the builds on the 
 that `hosts.toml` names for each host.
 
 The recipe runs every tool it builds. A Linux or Windows tool runs over ssh on the
-machine that `LINUX_REMOTE` or `WINDOWS_REMOTE` names. The Linux machine needs
-`qemu-x86_64` through binfmt when its processor is arm64. `REMOTE_SSH_OPTIONS` passes
-options to ssh and scp.
+machine that `LINUX_REMOTE` or `WINDOWS_REMOTE` names. `./c` sets them to
+`eddie@192.168.60.131` and `eddie@192.168.60.132` unless they are set. The Linux
+machine needs `qemu-x86_64` through binfmt when its processor is arm64.
+`REMOTE_SSH_OPTIONS` passes options to ssh and scp.
+
+Commit the recipe first, because `scripts/pack.sh` refuses a build of uncommitted files.
+Then build and publish:
 
 ```sh
-export LINUX_REMOTE=eddie@192.168.60.131 WINDOWS_REMOTE=eddie@192.168.60.132
-ACCEPT_LICENSE=yes scripts/build.sh builtins
-scripts/build.sh macos-arm64
-scripts/build.sh macos-x86_64
-scripts/build.sh linux-x86_64
-scripts/build.sh linux-arm64
-ACCEPT_LICENSE=yes scripts/build.sh windows-x86_64
-ACCEPT_LICENSE=yes scripts/build.sh windows-arm64
+./c
+./r
 ```
 
-`ACCEPT_LICENSE=yes` accepts the licence terms of the Microsoft CRT and Windows SDK,
-which xwin downloads. Commit the recipe before the builds that go into a release,
-because `scripts/pack.sh` refuses a build of uncommitted files. Then pack each host and
-publish.
+`./c` builds the builtins, then each host of `hosts.toml` with `scripts/build.sh`, and
+stops at the first failure. It accepts the licence terms of the Microsoft CRT and Windows
+SDK, which xwin downloads.
 
-```sh
-for host in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64 windows-x86_64 windows-arm64; do
-    scripts/pack.sh "$host"
-done
-scripts/release.sh
-```
-
-`scripts/release.sh` needs `gh` logged in to an account that can write releases of
-`anti-lang/llvm-tools`. `RELEASE_KEY` names the private key, and the script signs with
-it. The key stays off the development machine, so `SHA256SUMS.sig` can also come from
-the machine that holds it. A run without either writes `SHA256SUMS`, stops and prints
-the two commands that sign it there.
+`./r` packs each host with `scripts/pack.sh`, then runs `scripts/release.sh`. A host
+whose two archives come from its build is not packed again, so `./r` can run again after
+a failure. `scripts/release.sh` writes `SHA256SUMS`, signs it with
+`keys/private/release-key.enc.pem` and checks the signature against
+`keys/public/release.pem`. openssl asks for the passphrase of the key. The script then
+tags the recipe commit, uploads the release and reads it back. It needs `gh` logged in to
+an account that can write releases of `anti-lang/llvm-tools`.
 
 ## Tests
 
