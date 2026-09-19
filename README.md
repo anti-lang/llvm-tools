@@ -39,6 +39,11 @@ that glibc and every newer one. `windows-x86_64` has both, with ASan as a DLL.
 `windows-arm64` has UBSan alone, since compiler-rt 23.1.1 builds no ASan for Windows on
 arm64.
 
+The ASan runtimes of x86_64 Linux and x86_64 Windows are built as upstream builds them
+and are unverified on real hardware. The only x86_64 here is emulation, where the
+allocator of ASan is known to stop. The first release-day run of the workflow on
+`ubuntu-24.04` and `windows-2025` verifies them, and this note comes off with that run.
+
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
 `windows-x86_64` and `windows-arm64`. The Linux binaries link musl, libc++ and zlib
 statically and name no shared library. The macOS binaries name `libSystem` and `libc++`
