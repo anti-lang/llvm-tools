@@ -33,6 +33,7 @@
 #   check-version           check the version the binaries in BIN report
 #   check-codegen           compile checks/hello.ll with opt and llc in BIN
 #                           for the six triples, into OUT
+#   check-link-version      check the ld64 version that clang in BIN records
 #   check-builtins          check the compiler-rt runtimes in BUILTINS, the
 #                           lib directory of a resource directory
 #   glibc-sysroot           unpack the glibc sysroot of ARCH and print it
@@ -310,6 +311,13 @@ set(macos_formats_arm64 mach-o-arm64 "mach-o arm64")
 set(windows_formats_x86_64 coff-x86-64)
 set(windows_formats_aarch64 coff-arm64)
 
+# DESIGN: the ld64 version that the clang of a macOS host records as its
+# default -mlinker-version, which decides the flags it passes to ld64. 1267
+# is the version that the clang of 23.1.1-anti.3 recorded. The recipe
+# decides it, not the Xcode of the build machine, which clang's configure
+# reads otherwise. Without ld-classic, Xcode gave 27037.1.
+set(darwin_link_version 1267)
+
 # Refuse a binary in bin that is missing, of another format, or names a
 # shared library outside the system set. The Mac cannot run ldd on an ELF
 # file, so llvm-objdump reads the dynamic section of Linux binaries. A
@@ -518,8 +526,37 @@ function(check_codegen bin dir)
     endforeach()
 endfunction()
 
+# Refuse a clang in bin that records another ld64 version than
+# darwin_link_version, or none. clang -### shows the version it records as
+# -target-linker-version of its cc1 line.
+function(check_link_version bin)
+    runs_here(here prefix)
+    if(NOT here)
+        message(FATAL_ERROR "the clang of ${HOST} does not run on ${machine}")
+    endif()
+    execute_process(COMMAND ${prefix} "${bin}/clang${exe}" "-###" -c -x c -
+                            -target arm64-apple-macos
+                    INPUT_FILE /dev/null OUTPUT_VARIABLE out ERROR_VARIABLE err
+                    RESULT_VARIABLE status)
+    if(NOT status EQUAL 0)
+        message(FATAL_ERROR "clang -### failed on ${HOST}: ${status} ${err}")
+    endif()
+    if(NOT "${out}${err}" MATCHES "\"-target-linker-version\" \"([^\"]*)\"")
+        message(FATAL_ERROR "the clang of ${HOST} records no ld64 version, and "
+                            "the pin is ${darwin_link_version}")
+    endif()
+    if(NOT CMAKE_MATCH_1 STREQUAL darwin_link_version)
+        message(FATAL_ERROR "the clang of ${HOST} records the ld64 version "
+                            "${CMAKE_MATCH_1}, and the pin is ${darwin_link_version}")
+    endif()
+    message(STATUS "clang: records the ld64 version ${CMAKE_MATCH_1}")
+endfunction()
+
 if(STEP STREQUAL "check-libraries")
     check_libraries("${BIN}")
+    return()
+elseif(STEP STREQUAL "check-link-version")
+    check_link_version("${BIN}")
     return()
 elseif(STEP STREQUAL "check-version")
     check_version("${BIN}")
@@ -1104,9 +1141,11 @@ prepare_sysroot()
 # DESIGN: the deployment target of a macOS host reaches the compiler
 # through CMake and through the environment, so a binary built by a step
 # that reads only one of them still starts on that macOS.
+set(llvm_flags "")
 if(os STREQUAL "macos")
     list(APPEND host_flags "-DCMAKE_OSX_DEPLOYMENT_TARGET=${deployment}")
     set(ENV{MACOSX_DEPLOYMENT_TARGET} "${deployment}")
+    list(APPEND llvm_flags "-DHOST_LINK_VERSION=${darwin_link_version}")
 endif()
 
 # Step 3, first half. A musl host builds its C++ runtimes and the
@@ -1223,6 +1262,7 @@ cmake_build("${work}/llvm" "${source}/llvm" OPTIONS
     -DLLVM_INCLUDE_EXAMPLES=OFF
     -DLLVM_INCLUDE_DOCS=OFF
     ${host_flags}
+    ${llvm_flags}
     # Step 4. The seven tools, clang and its built-in headers, and nothing
     # else.
     TARGETS ${BINARIES} clang-resource-headers)
@@ -1238,6 +1278,11 @@ foreach(tool IN LISTS BINARIES)
     endif()
 endforeach()
 check_version("${tools_bin}")
+# clang's configure reads the version of ld64 on a macOS build alone, so the
+# clang of Linux and Windows records none.
+if(os STREQUAL "macos")
+    check_link_version("${tools_bin}")
+endif()
 runs_here(here prefix)
 if(here)
     check_codegen("${tools_bin}" "${work}/codegen")

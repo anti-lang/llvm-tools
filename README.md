@@ -48,9 +48,10 @@ allocator of ASan is known to stop. The first release-day run of the workflow on
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
 `windows-x86_64` and `windows-arm64`. The Linux binaries link musl, libc++ and zlib
 statically and name no shared library. The macOS binaries name `libSystem` and `libc++`
-of the system and record macOS 11.0 as their `minos`. The Windows binaries link the CRT
-statically and import system DLLs
-alone.
+of the system and record macOS 11.0 as their `minos`. Their clang records ld64 1267 as
+its default linker version, the one of `23.1.1-anti.3`, which the recipe pins rather than
+read from the Xcode of the build machine. The Windows binaries link the CRT statically
+and import system DLLs alone.
 
 ## Changes
 

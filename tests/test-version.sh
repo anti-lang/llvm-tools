@@ -75,6 +75,36 @@ printf '#!/bin/sh\n[ "$2" = link ] && exit 1\necho "LLD %s"\n' "$version" \
 expect_refusal "lld -flavor link" recipe "$root" -DHOST=macos-arm64 \
     -DSTEP=check-version -DBIN="$work/flavor"
 
+# The clang of a macOS host records the pinned ld64 version, and the step
+# check-link-version refuses one that records another or none.
+link_version=$(sed -n 's/^set(darwin_link_version \([0-9.]*\))$/\1/p' \
+    "$root/build-llvm.cmake")
+[ "$link_version" = 1267 ] ||
+    fail "build-llvm.cmake pins the ld64 version '$link_version', not 1267"
+# Write clang into directory $1 as a script whose -### line records the
+# linker version $2, or none when $2 is empty.
+clang_recording() {
+    mkdir -p "$1"
+    {
+        printf '#!/bin/sh\n'
+        if [ -n "$2" ]; then
+            printf 'echo \x27 "-cc1" "-target-linker-version" "%s" "-x" "c"\x27 >&2\n' "$2"
+        else
+            printf 'echo \x27 "-cc1" "-x" "c"\x27 >&2\n'
+        fi
+    } > "$1/clang"
+    chmod +x "$1/clang"
+}
+clang_recording "$work/pinned" "$link_version"
+recipe "$root" -DHOST=macos-arm64 -DSTEP=check-link-version -DBIN="$work/pinned" \
+    >/dev/null || fail "a clang that records $link_version was refused"
+clang_recording "$work/xcode" 27037.1
+expect_refusal "records the ld64 version 27037.1" recipe "$root" -DHOST=macos-arm64 \
+    -DSTEP=check-link-version -DBIN="$work/xcode"
+clang_recording "$work/unpinned" ""
+expect_refusal "records no ld64 version" recipe "$root" -DHOST=macos-arm64 \
+    -DSTEP=check-link-version -DBIN="$work/unpinned"
+
 # The tools of another operating system run through RUNNER alone.
 expect_refusal "RUNNER" recipe "$root" -DHOST=linux-x86_64 \
     -DSTEP=check-version -DBIN="$work/right"
