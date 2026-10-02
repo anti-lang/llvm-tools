@@ -14,6 +14,16 @@ fingerprint=$(openssl pkey -pubin -in "$public" -outform DER |
 grep -q "$fingerprint" "$root/README.md" ||
     fail "README.md does not name the fingerprint $fingerprint"
 
+# The first paragraph of the README, below its title, names every tool that
+# hosts.toml names.
+opening=$(sed -n '3,/^$/p' "$root/README.md" | tr '\n' ' ')
+for tool in $(. "$root/scripts/common.sh" && toml_get "$root/hosts.toml" "" tools); do
+    case $opening in
+        *"\`$tool\`"*) ;;
+        *) fail "the opening of README.md does not name $tool" ;;
+    esac
+done
+
 # scripts/common.sh defines the paths of the release key, and no other
 # script or command spells them.
 for file in "$root"/scripts/*.sh "$root/c" "$root/r"; do

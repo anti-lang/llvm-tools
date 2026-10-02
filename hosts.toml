@@ -3,8 +3,9 @@
 # of sysroot from pins/sysroot.toml and the CMake options of the host.
 # build-llvm.cmake and scripts/common.sh read the tables.
 
-# The five tools that every tools archive holds.
-tools = ["lld", "llvm-mc", "llvm-ar", "llvm-objdump", "llvm-readobj"]
+# The seven tools that every tools archive holds. antic writes LLVM IR
+# text and runs opt and llc on it.
+tools = ["lld", "llvm-mc", "opt", "llc", "llvm-ar", "llvm-objdump", "llvm-readobj"]
 
 # The compiler that every clang archive holds, beside its built-in headers
 # and the compiler-rt builtins of all six targets.

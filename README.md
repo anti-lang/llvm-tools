@@ -1,11 +1,12 @@
 # llvm-tools
 
-The five LLVM tools that Anti ships, `llvm-mc`, `lld`, `llvm-ar`, `llvm-objdump` and
-`llvm-readobj`, and the clang that builds Anti, for every host from the pinned LLVM
-source. The compiler that builds them is clang of the pinned LLVM release. Each host
-gets two archives, published as assets of a GitHub release: the tools, and clang with
-its built-in headers, the compiler-rt builtins of all six targets and the sanitizer
-runtimes. `antic` downloads the archives of its host and nothing else from LLVM.
+The seven LLVM tools that Anti ships, `llvm-mc`, `lld`, `opt`, `llc`, `llvm-ar`,
+`llvm-objdump` and `llvm-readobj`, and the clang that builds Anti, for every host from
+the pinned LLVM source. The compiler that builds them is clang of the pinned LLVM
+release. Each host gets two archives, published as assets of a GitHub release: the
+tools, and clang with its built-in headers, the compiler-rt builtins of all six targets
+and the sanitizer runtimes. `antic` downloads the archives of its host and nothing else
+from LLVM.
 
 ## Releases
 
@@ -18,7 +19,7 @@ Each release holds these files.
 
 | File | Contents |
 |---|---|
-| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the five tools, `licenses/`, `VERSION` |
+| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the seven tools, `licenses/`, `VERSION` |
 | `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers, the builtins and the sanitizer runtimes, `licenses/`, `VERSION` |
 | `SHA256SUMS` | The SHA-256 digest of each archive |
 | `SHA256SUMS.sig` | An ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS` |
@@ -53,6 +54,8 @@ alone.
 
 ## Changes
 
+- `23.1.1-anti.4`: the tools archives carry `opt` and `llc` beside `llvm-mc`, the
+  optimizer and the code generator of the same source.
 - `23.1.1-anti.3`: the clang archives carry the sanitizer runtimes of Linux on glibc and
   of Windows beside those of macOS.
 
@@ -84,6 +87,7 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | `c` | Builds the builtins and every host |
 | `r` | Packs every host and publishes the release |
 | `build-llvm.cmake` | The recipe, which builds one host |
+| `checks/hello.ll` | The module that `opt` and `llc` compile for the six triples |
 | `hosts.toml` | Per host: triple, build machine, sysroot kind, CMake options |
 | `pins/llvm-version` | The LLVM version |
 | `pins/source.sha256` | The SHA-256 digest of the LLVM source archive |
@@ -114,7 +118,9 @@ The recipe runs every tool it builds. A Linux or Windows tool runs over ssh on t
 machine that `LINUX_REMOTE` or `WINDOWS_REMOTE` names. `./c` sets them to
 `eddie@192.168.60.131` and `eddie@192.168.60.132` unless they are set. The Linux
 machine needs `qemu-x86_64` through binfmt when its processor is arm64.
-`REMOTE_SSH_OPTIONS` passes options to ssh and scp.
+`REMOTE_SSH_OPTIONS` passes options to ssh and scp. `opt` and `llc` of a host that runs
+on the build machine also compile `checks/hello.ll` for the six triples, and its
+`llvm-readobj` checks the format of each object.
 
 Commit the recipe first, because `scripts/pack.sh` refuses a build of uncommitted files.
 Then build and publish:

@@ -1,4 +1,4 @@
-# Build the five LLVM tools and clang of one host from the pinned LLVM
+# Build the seven LLVM tools and clang of one host from the pinned LLVM
 # source, or the compiler-rt builtins of all six targets.
 #
 #   cmake -DHOST=<host> [-DRUNNER=<command>] [-DACCEPT_LICENSE=yes] \
@@ -8,11 +8,13 @@
 # HOST names a table of hosts.toml. The compiler is clang of the LLVM
 # release that pins/release.toml names for this machine. The recipe checks
 # the digest and the Sigstore attestation of that archive and the digest of
-# the source. It builds lld, llvm-mc, llvm-ar, llvm-objdump, llvm-readobj
-# and clang into build/<host>/llvm/bin, with the built-in headers of clang
-# beside them. It refuses a binary that names a shared library outside the
-# system set of its host, and one that reports another version. It then
-# writes build/<host>/recipe, which scripts/pack.sh reads.
+# the source. It builds lld, llvm-mc, opt, llc, llvm-ar, llvm-objdump,
+# llvm-readobj and clang into build/<host>/llvm/bin, with the built-in
+# headers of clang beside them. It refuses a binary that names a shared
+# library outside the system set of its host, and one that reports another
+# version. opt and llc of a host that runs on this machine compile
+# checks/hello.ll for the six triples. It then writes build/<host>/recipe,
+# which scripts/pack.sh reads.
 #
 # STEP=builtins builds the compiler-rt builtins of the six targets and the
 # sanitizer runtimes into build/builtins, which every clang archive
@@ -29,6 +31,8 @@
 #   fetch-file              download URL to FILE and check SHA256
 #   check-libraries         check the shared libraries of the binaries in BIN
 #   check-version           check the version the binaries in BIN report
+#   check-codegen           compile checks/hello.ll with opt and llc in BIN
+#                           for the six triples, into OUT
 #   check-builtins          check the compiler-rt runtimes in BUILTINS, the
 #                           lib directory of a resource directory
 #   glibc-sysroot           unpack the glibc sysroot of ARCH and print it
@@ -386,16 +390,26 @@ function(check_libraries bin)
     endforeach()
 endfunction()
 
+# Set <here> to yes when the binaries of HOST run on this machine, and
+# <prefix> to the command that runs them here.
+function(runs_here here prefix)
+    set(${here} yes PARENT_SCOPE)
+    set(${prefix} "" PARENT_SCOPE)
+    if(HOST STREQUAL "macos-x86_64" AND machine STREQUAL "macos-arm64")
+        # Rosetta runs the x86_64 binaries on this machine.
+        set(${prefix} arch -x86_64 PARENT_SCOPE)
+    elseif(NOT HOST STREQUAL machine)
+        set(${here} no PARENT_SCOPE)
+    endif()
+endfunction()
+
 # Refuse a binary in bin that fails to run or reports another version. lld
 # answers under ld.lld, ld64.lld and lld-link, which antic calls, so each
-# flavor runs.
+# flavor runs. llc must carry the back ends of both processors of antic.
 function(check_version bin)
-    set(prefix "")
-    if(NOT HOST STREQUAL machine)
-        if(HOST STREQUAL "macos-x86_64" AND machine STREQUAL "macos-arm64")
-            # Rosetta runs the x86_64 binaries on this machine.
-            set(prefix arch -x86_64)
-        elseif(DEFINED RUNNER)
+    runs_here(here prefix)
+    if(NOT here)
+        if(DEFINED RUNNER)
             set(prefix ${RUNNER})
         else()
             message(FATAL_ERROR "the tools of ${HOST} do not run on ${machine}. "
@@ -429,6 +443,78 @@ function(check_version bin)
         string(REGEX MATCH "[^\n]*${found}[^\n]*" line "${out}${err}")
         string(STRIP "${line}" line)
         message(STATUS "${run}: ${line}")
+        if(tool STREQUAL "llc")
+            foreach(target x86-64 aarch64)
+                if(NOT out MATCHES "\n +${target} +- ")
+                    message(FATAL_ERROR "llc registers no ${target} target on ${HOST}")
+                endif()
+            endforeach()
+            message(STATUS "llc: registers x86-64 and aarch64")
+        endif()
+    endforeach()
+endfunction()
+
+# The triples that antic compiles for, each with the format in which
+# llvm-readobj reads an object of it.
+set(codegen_triples
+    "x86_64-unknown-linux-gnu=elf64-x86-64"
+    "aarch64-unknown-linux-gnu=elf64-littleaarch64"
+    "x86_64-apple-macos=Mach-O 64-bit x86-64"
+    "arm64-apple-macos=Mach-O arm64"
+    "x86_64-pc-windows-msvc=COFF-x86-64"
+    "aarch64-pc-windows-msvc=COFF-ARM64")
+
+# Run <command> and stop unless it succeeds. <name> names it in the error.
+function(run_or_stop name)
+    execute_process(COMMAND ${ARGN} OUTPUT_VARIABLE out ERROR_VARIABLE err
+                    RESULT_VARIABLE status)
+    if(NOT status EQUAL 0)
+        message(FATAL_ERROR "${name} failed on ${HOST}: ${status} ${err}")
+    endif()
+    set(out "${out}" PARENT_SCOPE)
+endfunction()
+
+# Refuse opt and llc in bin unless checks/hello.ll goes through both for
+# each triple of antic, and llvm-readobj in bin reads each object in the
+# format of its triple. The bitcode and the objects go into dir.
+#
+# DESIGN: the check runs the tools of a host that runs on this machine,
+# natively or through Rosetta. RUNNER passes a tool its arguments and
+# nothing else, so the files of the check would not reach the other
+# machine. The version check runs opt and llc of every host.
+function(check_codegen bin dir)
+    runs_here(here prefix)
+    if(NOT here)
+        message(FATAL_ERROR "the tools of ${HOST} do not run on ${machine}, and "
+                            "the codegen check runs them here")
+    endif()
+    foreach(tool opt llc llvm-readobj)
+        if(NOT EXISTS "${bin}/${tool}${exe}")
+            message(FATAL_ERROR "${tool}${exe} is missing in ${bin}")
+        endif()
+    endforeach()
+    file(REMOVE_RECURSE "${dir}")
+    file(MAKE_DIRECTORY "${dir}")
+    set(passes "default<O2>")
+    run_or_stop("opt -passes=${passes}" ${prefix} "${bin}/opt${exe}"
+                "-passes=${passes}" -o "${dir}/hello.bc" "${root}/checks/hello.ll")
+    foreach(row IN LISTS codegen_triples)
+        string(REPLACE "=" ";" row "${row}")
+        list(GET row 0 triple)
+        list(GET row 1 format)
+        set(object "${dir}/${triple}/hello.o")
+        file(MAKE_DIRECTORY "${dir}/${triple}")
+        run_or_stop("llc -mtriple=${triple}" ${prefix} "${bin}/llc${exe}" -O2
+                    -filetype=obj "-mtriple=${triple}" -o "${object}"
+                    "${dir}/hello.bc")
+        run_or_stop("llvm-readobj of ${triple}" ${prefix} "${bin}/llvm-readobj${exe}"
+                    --file-header "${object}")
+        string(REGEX MATCH "(^|\n)Format: ([^\r\n]+)" found "${out}")
+        set(found "${CMAKE_MATCH_2}")
+        if(NOT found STREQUAL format)
+            message(FATAL_ERROR "llc writes ${found} for ${triple}, not ${format}")
+        endif()
+        message(STATUS "hello.o for ${triple}: ${found}")
     endforeach()
 endfunction()
 
@@ -437,6 +523,12 @@ if(STEP STREQUAL "check-libraries")
     return()
 elseif(STEP STREQUAL "check-version")
     check_version("${BIN}")
+    return()
+elseif(STEP STREQUAL "check-codegen")
+    if(NOT DEFINED OUT)
+        set(OUT "${work}/codegen")
+    endif()
+    check_codegen("${BIN}" "${OUT}")
     return()
 elseif(NOT STEP MATCHES "^(all|builtins|check-builtins|glibc-sysroot)$")
     message(FATAL_ERROR "STEP is '${STEP}', which the recipe does not know")
@@ -1131,7 +1223,7 @@ cmake_build("${work}/llvm" "${source}/llvm" OPTIONS
     -DLLVM_INCLUDE_EXAMPLES=OFF
     -DLLVM_INCLUDE_DOCS=OFF
     ${host_flags}
-    # Step 4. The five tools, clang and its built-in headers, and nothing
+    # Step 4. The seven tools, clang and its built-in headers, and nothing
     # else.
     TARGETS ${BINARIES} clang-resource-headers)
 
@@ -1146,5 +1238,12 @@ foreach(tool IN LISTS BINARIES)
     endif()
 endforeach()
 check_version("${tools_bin}")
+runs_here(here prefix)
+if(here)
+    check_codegen("${tools_bin}" "${work}/codegen")
+else()
+    message(STATUS "the codegen check runs the tools of a host that runs on "
+                   "${machine}, and those of ${HOST} run on another machine")
+endif()
 write_stamp("${stamp}")
 message(STATUS "${tools_bin} holds the tools and clang of LLVM ${version} for ${HOST}")

@@ -12,7 +12,7 @@ build=$(cat "$copy/pins/build-number")
 commit=$(git -C "$copy" rev-parse HEAD)
 tag="$version-anti.$build"
 
-# Stand in for a finished build of <host>: five tools, clang and the
+# Stand in for a finished build of <host>: seven tools, clang and the
 # built-in headers. The stamp that the recipe writes after its checks gets
 # clean set to $2 and the commit $3.
 fake_build() {
@@ -22,7 +22,7 @@ fake_build() {
     stamp=$(recipe_path "$copy" "$host" stamp)
     exe=$(recipe_path "$copy" "$host" exe)
     mkdir -p "$bin" "$resource/include" "$(dirname "$stamp")"
-    for tool in lld llvm-mc llvm-ar llvm-objdump llvm-readobj clang; do
+    for tool in lld llvm-mc opt llc llvm-ar llvm-objdump llvm-readobj clang; do
         printf '%s of %s\n' "$tool" "$host" > "$bin/$tool$exe"
         chmod +x "$bin/$tool$exe"
     done
@@ -59,7 +59,7 @@ fake_build linux-x86_64 yes "$commit"
 archive="$dist/llvm-tools-$tag-linux-x86_64.tar.xz"
 [ -f "$archive" ] || fail "$archive was not written"
 listing=$(tar -tJf "$archive" | sort | tr '\n' ' ')
-expected="VERSION bin/ bin/lld bin/llvm-ar bin/llvm-mc bin/llvm-objdump bin/llvm-readobj licenses/ licenses/llvm.txt licenses/musl.txt "
+expected="VERSION bin/ bin/llc bin/lld bin/llvm-ar bin/llvm-mc bin/llvm-objdump bin/llvm-readobj bin/opt licenses/ licenses/llvm.txt licenses/musl.txt "
 [ "$listing" = "$expected" ] || fail "the archive holds: $listing"
 tar -xJf "$archive" -C "$work" VERSION bin/lld licenses/llvm.txt
 printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" "$commit" \
@@ -95,7 +95,7 @@ fake_build windows-arm64 yes "$commit"
 "$copy/scripts/pack.sh" windows-arm64 >/dev/null
 listing=$(tar -tJf "$dist/llvm-tools-$tag-windows-arm64.tar.xz" |
     sort | tr '\n' ' ')
-expected="VERSION bin/ bin/lld.exe bin/llvm-ar.exe bin/llvm-mc.exe bin/llvm-objdump.exe bin/llvm-readobj.exe licenses/ licenses/llvm.txt "
+expected="VERSION bin/ bin/llc.exe bin/lld.exe bin/llvm-ar.exe bin/llvm-mc.exe bin/llvm-objdump.exe bin/llvm-readobj.exe bin/opt.exe licenses/ licenses/llvm.txt "
 [ "$listing" = "$expected" ] || fail "the Windows archive holds: $listing"
 entries=$(tar -tJf "$dist/clang-$tag-windows-arm64.tar.xz" | sort)
 printf '%s\n' "$entries" | grep -qx bin/clang.exe ||
@@ -125,9 +125,11 @@ head=$(git -C "$copy" rev-parse HEAD)
 fake_builtins yes "$head"
 
 # A missing tool or a missing clang is refused.
-fake_build macos-arm64 yes "$head"
-rm "$(recipe_path "$copy" macos-arm64 bin)/llvm-mc"
-expect_refusal "llvm-mc" "$copy/scripts/pack.sh" macos-arm64
+for tool in llvm-mc opt llc; do
+    fake_build macos-arm64 yes "$head"
+    rm "$(recipe_path "$copy" macos-arm64 bin)/$tool"
+    expect_refusal "$tool" "$copy/scripts/pack.sh" macos-arm64
+done
 fake_build macos-arm64 yes "$head"
 rm "$(recipe_path "$copy" macos-arm64 bin)/clang"
 expect_refusal "clang" "$copy/scripts/pack.sh" macos-arm64

@@ -15,7 +15,7 @@ cmake_tools=$(recipe "$root" -DSTEP=tools)
 shell_tools=$(toml_get "$root/hosts.toml" "" tools)
 [ "$cmake_tools" = "$shell_tools" ] ||
     fail "the readers disagree on the tools: '$cmake_tools' and '$shell_tools'"
-[ "$shell_tools" = "$(printf 'lld\nllvm-mc\nllvm-ar\nllvm-objdump\nllvm-readobj')" ] ||
+[ "$shell_tools" = "$(printf 'lld\nllvm-mc\nopt\nllc\nllvm-ar\nllvm-objdump\nllvm-readobj')" ] ||
     fail "hosts.toml names the tools '$shell_tools'"
 
 # The compiler goes into an archive of its own, and the recipe checks it
