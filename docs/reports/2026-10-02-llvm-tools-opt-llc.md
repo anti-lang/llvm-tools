@@ -1,9 +1,11 @@
 # opt and llc, 23.1.1-anti.4
 
 The tools archive of each of the six hosts now holds `opt` and `llc` beside `llvm-mc`,
-seven tools in all. All twelve archives come from recipe commit `26b62fa`, one build of
+seven tools in all. All twelve archives come from recipe commit `449dca5`, one build of
 the pinned LLVM 23.1.1 source, and lie in `build/dist` under the tag `23.1.1-anti.4`.
-Nothing is published. `./r`, the last section, publishes them.
+Beside `opt` and `llc`, every file of every archive is byte for byte that of anti.3, but
+`VERSION`. The recipe now pins the ld64 version that the macOS clang records, which a
+change of Xcode on the build machine had moved. `./r`, the last section, publishes them.
 
 ## Recipe
 
@@ -23,6 +25,44 @@ Nothing is published. `./r`, the last section, publishes them.
   step.
 - `tests/test-files.sh` refuses a README whose first paragraph leaves out a tool of
   `hosts.toml`.
+- The LLVM configure of both macOS hosts takes `-DHOST_LINK_VERSION=1267`, and the step
+  `check-link-version` refuses a built clang that records another version or none. The
+  next section gives the reason.
+
+## The ld64 version of the macOS clang
+
+clang's configure reads the version of ld64 on the build machine and builds it into
+clang as the default of `-mlinker-version`, which decides the flags that clang passes to
+ld64 and reaches cc1 as `-target-linker-version`. anti.3 was configured on 2026-09-19
+against `ld-classic`, ld64 1267. The Xcode of the build machine now has no `ld-classic`,
+so the first anti.4 build, at `26b62fa`, took `ld` 27037.1, and the clang of both macOS
+hosts differed from that of anti.3 in its UUID and that version.
+
+The recipe now decides the version, not the Xcode of the build machine.
+`darwin_link_version` in `build-llvm.cmake` holds 1267, the version that the clang of
+anti.3 recorded, and the LLVM configure of both macOS hosts takes it as
+`HOST_LINK_VERSION`. The step
+`check-link-version` reads the version from the cc1 line of `clang -### -c -x c -` and
+refuses any other, or none, so the next upgrade of Xcode stops the build before a
+release. The Linux and Windows clang record none, since clang's configure reads ld64 on a
+macOS build alone.
+
+- Both macOS builds print `Host linker version: 1267` and
+  `clang: records the ld64 version 1267`. The check refuses the clang of the first anti.4
+  build: `records the ld64 version 27037.1, and the pin is 1267`.
+- `clang -### -o t t.o -target arm64-apple-macos` prints the same link line with the new
+  clang of `macos-arm64` as with the anti.3 clang in `antic/build/deps/clang`, whose bytes
+  are those of the anti.3 archive. Only the install directory differs:
+
+```text
+"/usr/bin/ld" "-demangle" "-lto_library" "<clang>/lib/libLTO.dylib" "-dynamic" "-arch" "arm64" "-platform_version" "macos" "26.0.0" "26.0.0" "-mllvm" "-enable-linkonceodr-outlining" "-o" "t" "t.o" "-lSystem" "<clang>/lib/clang/23/lib/darwin/libclang_rt.osx.a"
+```
+
+- The clang of 27037.1 prints that link line as well. The version shows in the cc1 line,
+  which the check reads.
+- compiler-rt reads the ld64 version as well, still 27037.1 in its log, and passes it to
+  its lit tests alone. The recipe builds no tests, and the builtins and sanitizer runtimes
+  are byte for byte those of anti.3.
 
 ## Hosts
 
@@ -32,16 +72,17 @@ no symbol table.
 
 | Host | `opt` | `llc` | `llvm-mc` | Tools archive, anti.3 | Tools archive, anti.4 | Growth |
 |---|---|---|---|---|---|---|
-| `linux-x86_64` | 60,208,064 | 60,284,800 | 12,221,168 | 26,271,712 | 58,191,964 | 31,920,252 |
-| `linux-arm64` | 57,083,424 | 57,145,656 | 12,211,024 | 23,635,156 | 51,805,188 | 28,170,032 |
-| `macos-arm64` | 66,357,296 | 66,406,528 | 12,424,768 | 25,034,028 | 54,399,068 | 29,365,040 |
-| `macos-x86_64` | 69,790,040 | 69,841,864 | 12,446,864 | 28,161,820 | 61,923,716 | 33,761,896 |
-| `windows-x86_64` | 52,609,536 | 52,738,560 | 12,049,408 | 25,795,084 | 54,842,416 | 29,047,332 |
-| `windows-arm64` | 46,550,016 | 46,665,728 | 11,697,664 | 22,577,824 | 47,595,952 | 25,018,128 |
+| `linux-x86_64` | 60,208,064 | 60,284,800 | 12,221,168 | 26,271,712 | 58,190,076 | 31,918,364 |
+| `linux-arm64` | 57,083,424 | 57,145,656 | 12,211,024 | 23,635,156 | 51,820,800 | 28,185,644 |
+| `macos-arm64` | 66,357,296 | 66,406,528 | 12,424,768 | 25,034,028 | 54,392,536 | 29,358,508 |
+| `macos-x86_64` | 69,790,040 | 69,841,864 | 12,446,864 | 28,161,820 | 61,934,492 | 33,772,672 |
+| `windows-x86_64` | 52,609,536 | 52,738,560 | 12,049,408 | 25,795,084 | 54,878,132 | 29,083,048 |
+| `windows-arm64` | 46,550,016 | 46,665,728 | 11,697,664 | 22,577,824 | 47,576,592 | 24,998,768 |
 
-Each tools archive about doubles, 177,282,680 bytes over the six. `opt` and `llc` each
+Each tools archive about doubles, 177,317,004 bytes over the six. `opt` and `llc` each
 link the optimizer and both back ends of LLVM statically, and xz shares nothing between
-the two files. The clang archives stay within 10 KB of anti.3.
+the two files. The clang archives hold the bytes of anti.3 but `VERSION`, and differ in
+size from those by a few KB of xz output.
 
 ## Verification
 
@@ -77,9 +118,10 @@ hello.o for aarch64-pc-windows-msvc: COFF-ARM64
   calls `puts` and returns 0.
 - Each tools archive lists `VERSION`, `bin/` with `llc`, `lld`, `llvm-ar`, `llvm-mc`,
   `llvm-objdump`, `llvm-readobj` and `opt`, `.exe` on Windows, and `licenses/`.
-  `VERSION` reads `llvm 23.1.1`, `build 4`, `recipe 26b62fa…`.
-- `lld`, `llvm-mc`, `llvm-ar`, `llvm-objdump` and `llvm-readobj` of `macos-arm64` are
-  byte for byte those of anti.3.
+  `VERSION` reads `llvm 23.1.1`, `build 4`, `recipe 449dca5…`.
+- On every host, `lld`, `llvm-mc`, `llvm-ar`, `llvm-objdump` and `llvm-readobj` are byte
+  for byte those of anti.3, and each clang archive differs from that of anti.3 in
+  `VERSION` alone. `opt` and `llc` are byte for byte those of the first anti.4 build.
 - `sh tests/run.sh` passes all 12 tests.
 
 ## Choices
@@ -89,24 +131,6 @@ hello.o for aarch64-pc-windows-msvc: COFF-ARM64
   the VM. The build of a Linux or Windows host says so in its log. The version check
   still runs `opt` and `llc` of those hosts on the VMs.
 - `checks/` is a new directory. It holds `hello.ll`, the input of the step.
-
-## Open question: the clang of macOS
-
-clang of both macOS hosts differs from anti.3 in about 112 bytes: its `LC_UUID` and its
-`HOST_LINK_VERSION`, the ld64 version that LLVM's configure reads from the build machine
-and builds into clang. anti.3 was configured on 2026-09-19 against `ld-classic`, ld64
-1267. The Xcode of this Mac now has no `ld-classic`, so configure took `ld` 27037.1. The
-clang of Linux and Windows is byte for byte that of anti.3. Every clang printed
-`clang version 23.1.1` and passed its checks.
-
-The work order says nothing else about the release changes, so Eddie decides before
-`./r`:
-
-1. Publish as built, with 27037.1 in the macOS clang.
-2. Pin `HOST_LINK_VERSION=1267` for the macOS hosts in the recipe. That is a new recipe
-   commit, so `./c` builds every host again, and the twelve unpublished anti.4 archives
-   in `build/dist` are deleted first, since `scripts/pack.sh` never writes over one.
-3. Build the macOS hosts against an Xcode that still carries `ld-classic`.
 
 ## Sizes, options
 
@@ -125,7 +149,8 @@ These are measurements, not changes. Nothing below is in the recipe.
   `tools/check-llvm.cmake` with seven tools, the runtime archive `bin/`,
   `pack-anti.cmake` and the `pinned_tools` test. It follows once the release exists.
 - `main` holds the recipe and this report, and neither is pushed. `./r` pushes the tag
-  on `26b62fa`.
+  on `449dca5`.
+- The archives of the first build, at `26b62fa`, lie in `build/dist-26b62fa`, unpublished.
 
 ## Publishing
 
@@ -135,8 +160,8 @@ Eddie runs, from the top of the repository:
 ./r
 ```
 
-`./r` finds each of the six hosts packed from its build at `26b62fa` and runs
+`./r` finds each of the six hosts packed from its build at `449dca5` and runs
 `scripts/release.sh`. That writes `SHA256SUMS` of the twelve archives, signs it with
-`keys/private/release-key.enc.pem`, whose passphrase openssl asks for, tags `26b62fa` as
+`keys/private/release-key.enc.pem`, whose passphrase openssl asks for, tags `449dca5` as
 `23.1.1-anti.4`, pushes the tag and uploads the 14 files to a draft that it publishes
 after the last one.
