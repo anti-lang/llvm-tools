@@ -115,6 +115,7 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | `keys/private/` | The private release key, encrypted, which git ignores |
 | `tests/` | The tests of the recipe and the scripts |
 | `docs/reports/` | The report of each release |
+| `docs/memory/` | The state of the releases, open decisions and gotchas of the build |
 
 Everything the recipe downloads and builds stays under `build/`.
 
