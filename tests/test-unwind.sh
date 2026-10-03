@@ -1,10 +1,10 @@
 #!/bin/sh
-# The step check-unwind refuses a libunwind.a that the AddressSanitizer
-# runtime of Linux cannot take as its unwinder. The archive must define
-# _Unwind_Backtrace and _Unwind_GetIP, which ASan calls. Every other name it
-# leaves undefined must be one that the libc of the glibc sysroot defines,
-# in libc.so.6 or libc_nonshared.a, and it must ask the linker for no
-# library. The release clang writes a stand-in libc and archives.
+# The step check-unwind refuses a libunwind.a that cannot serve as the
+# unwinder of the ASan runtime of Linux. The archive must define
+# _Unwind_Backtrace and _Unwind_GetIP, which ASan calls. libc.so.6 or
+# libc_nonshared.a of the glibc sysroot must define every name it leaves
+# undefined. It must ask the linker for no library. The release clang
+# writes a stand-in libc and archives.
 . "$(dirname "$0")/lib.sh"
 
 bin=$(release_bin)
