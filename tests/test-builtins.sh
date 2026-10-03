@@ -3,8 +3,9 @@
 # lacks a file. It also refuses a file of another format. Each target has
 # its builtins. Linux on glibc, windows-x86_64 and macOS also have ASan
 # and UBSan. windows-arm64 has UBSan alone, since compiler-rt 23.1.1 gives
-# Windows on arm64 no ASan. The release clang writes a small object of
-# each format for the fixtures.
+# Windows on arm64 no ASan. Linux on glibc also has libunwind, the unwinder
+# of ASan there. The release clang writes a small object of each format for
+# the fixtures.
 . "$(dirname "$0")/lib.sh"
 
 bin=$(release_bin)
@@ -37,14 +38,15 @@ for arch in x86_64 aarch64; do
     plain $arch-unknown-linux-musl $arch-unknown-linux-musl/clang_rt.crtend.o
 done
 
-# The static sanitizer runtimes of both glibc targets, and the symbol
-# lists that clang passes to the linker beside them.
+# The static sanitizer runtimes of both glibc targets, the symbol lists
+# that clang passes to the linker beside them, and libunwind.
 for arch in x86_64 aarch64; do
     gnu=$arch-unknown-linux-gnu
     for name in asan asan_cxx asan_static asan-preinit ubsan_standalone \
                 ubsan_standalone_cxx; do
         archive $gnu $gnu/libclang_rt.$name.a
     done
+    archive $gnu $gnu/libunwind.a
     for name in asan asan_cxx ubsan_standalone ubsan_standalone_cxx; do
         printf '{\n  f;\n};\n' > "$tree/$gnu/libclang_rt.$name.a.syms"
     done
@@ -102,6 +104,15 @@ archive $arm $arm/clang_rt.ubsan_standalone.lib
 archive aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu/libclang_rt.asan_cxx.a
 expect_refusal "elf64-x86-64" check
 archive x86_64-unknown-linux-gnu x86_64-unknown-linux-gnu/libclang_rt.asan_cxx.a
+
+# libunwind lies beside the runtimes of each glibc target, of its format.
+mv "$tree/x86_64-unknown-linux-gnu/libunwind.a" "$work/kept.a"
+expect_refusal "x86_64-unknown-linux-gnu/libunwind.a" check
+mv "$work/kept.a" "$tree/x86_64-unknown-linux-gnu/libunwind.a"
+
+archive x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu/libunwind.a
+expect_refusal "elf64-littleaarch64" check
+archive aarch64-unknown-linux-gnu aarch64-unknown-linux-gnu/libunwind.a
 
 check >/dev/null || fail "the restored tree was refused"
 finished=yes

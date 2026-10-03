@@ -16,9 +16,10 @@
 # checks/hello.ll for the six triples. It then writes build/<host>/recipe,
 # which scripts/pack.sh reads.
 #
-# STEP=builtins builds the compiler-rt builtins of the six targets and the
-# sanitizer runtimes into build/builtins, which every clang archive
-# carries, and writes build/builtins/recipe.
+# STEP=builtins builds the compiler-rt builtins of the six targets, the
+# sanitizer runtimes and the libunwind of Linux on glibc into
+# build/builtins, which every clang archive carries, and writes
+# build/builtins/recipe.
 #
 # RUNNER is a command that runs a binary of another operating system.
 # ACCEPT_LICENSE=yes lets xwin download the Microsoft CRT and Windows SDK
@@ -36,6 +37,8 @@
 #   check-link-version      check the ld64 version that clang in BIN records
 #   check-builtins          check the compiler-rt runtimes in BUILTINS, the
 #                           lib directory of a resource directory
+#   check-unwind            check that LIBRARY, a libunwind.a of ARCH, needs
+#                           nothing but the libc of the glibc sysroot SYSROOT
 #   glibc-sysroot           unpack the glibc sysroot of ARCH and print it
 cmake_minimum_required(VERSION 3.25)
 
@@ -168,6 +171,9 @@ endfunction()
 file(READ "${pins}/llvm-version" version)
 string(STRIP "${version}" version)
 string(REGEX MATCH "^[0-9]+" major "${version}")
+# The lib directory of the resource directory that the builtins build
+# installs, which every clang archive carries as lib/clang/<major>/lib.
+set(builtins_lib "${builtins_install}/lib/clang/${major}/lib")
 toml_get("${hosts_file}" "" tools TOOLS)
 toml_get("${hosts_file}" "" compiler COMPILER)
 set(BINARIES ${TOOLS} ${COMPILER})
@@ -254,7 +260,7 @@ function(setup_host host)
     endforeach()
 endfunction()
 
-if(NOT STEP MATCHES "^((check-)?builtins|glibc-sysroot)$")
+if(NOT STEP MATCHES "^((check-)?builtins|check-unwind|glibc-sysroot)$")
     # Every other step works on one host.
     if(NOT HOST IN_LIST HOSTS)
         message(FATAL_ERROR "HOST is '${HOST}', and hosts.toml names ${HOSTS}")
@@ -278,7 +284,7 @@ if(NOT STEP MATCHES "^((check-)?builtins|glibc-sysroot)$")
     if(STEP STREQUAL "paths")
         say("bin=${tools_bin}")
         say("resource=${work}/llvm/lib/clang/${major}")
-        say("builtins=${builtins_install}/lib/clang/${major}/lib")
+        say("builtins=${builtins_lib}")
         say("builtins-stamp=${builtins_stamp}")
         say("stamp=${stamp}")
         say("dist=${dist}")
@@ -567,7 +573,7 @@ elseif(STEP STREQUAL "check-codegen")
     endif()
     check_codegen("${BIN}" "${OUT}")
     return()
-elseif(NOT STEP MATCHES "^(all|builtins|check-builtins|glibc-sysroot)$")
+elseif(NOT STEP MATCHES "^(all|builtins|check-builtins|check-unwind|glibc-sysroot)$")
     message(FATAL_ERROR "STEP is '${STEP}', which the recipe does not know")
 endif()
 
@@ -896,6 +902,11 @@ set(windows_x86_64_sanitizers clang_rt.asan_dynamic.dll
 set(windows_arm64_sanitizers clang_rt.ubsan_standalone.lib
     clang_rt.ubsan_standalone_cxx.lib)
 
+# The unwinder that the ASan runtime of Linux on glibc calls, and the two
+# functions it calls. It lies beside the sanitizer runtimes of its target.
+set(unwind_library libunwind.a)
+set(unwind_entry_points _Unwind_Backtrace _Unwind_GetIP)
+
 # The options of compiler-rt that build the builtins and nothing else.
 set(builtins_options
     -DCOMPILER_RT_BUILD_BUILTINS=ON
@@ -1020,7 +1031,7 @@ function(build_sanitizers host)
         foreach(name IN LISTS linux_sanitizer_symbols)
             set(syms "${triple}/libclang_rt.${name}.a.syms")
             file(COPY_FILE "${work}/build/compiler-rt/lib/${syms}"
-                 "${builtins_install}/lib/clang/${major}/lib/${syms}")
+                 "${builtins_lib}/${syms}")
         endforeach()
     else()
         write_toolchain("${toolchain}" RUNTIMES)
@@ -1033,6 +1044,118 @@ function(build_sanitizers host)
         cmake_build("${work}/build" "${source}/runtimes" OPTIONS ${options}
                     TARGETS install)
     endif()
+endfunction()
+
+# Build the libunwind of <host> beside its sanitizer runtimes.
+#
+# DESIGN: the ASan runtime of Linux calls _Unwind_Backtrace and
+# _Unwind_GetIP, which glibc leaves to GCC's libgcc_s. The libunwind of the
+# pinned source gives both. It is built as the sanitizer runtimes are, by
+# the release clang against glibc 2.35 for <arch>-unknown-linux-gnu, and
+# static. It has a build of its own, so the sanitizer runtimes stay those
+# of a build without it. macOS and Windows get none: their ASan unwinds
+# with the unwinder of the system, and compiler-rt builds their runtimes
+# against their own SDKs, not the glibc sysroot.
+function(build_unwind host)
+    setup_host("${host}")
+    if(NOT os STREQUAL "linux")
+        return()
+    endif()
+    set(work "${builtins_root}/${host}-unwind")
+    set(toolchain "${work}/toolchain.cmake")
+    prepare_glibc("${arch}" sysroot)
+    set(triple "${arch}-unknown-linux-gnu")
+    write_toolchain("${toolchain}" RUNTIMES)
+    cmake_build("${work}/build" "${source}/runtimes" OPTIONS
+        "-DCMAKE_TOOLCHAIN_FILE=${toolchain}" -DCMAKE_BUILD_TYPE=Release
+        -DLLVM_ENABLE_RUNTIMES=libunwind
+        "-DCMAKE_INSTALL_PREFIX=${builtins_install}"
+        -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON
+        "-DLLVM_DEFAULT_TARGET_TRIPLE=${triple}"
+        -DLLVM_INCLUDE_TESTS=OFF
+        -DLIBUNWIND_ENABLE_SHARED=OFF
+        -DLIBUNWIND_USE_COMPILER_RT=ON
+        -DLIBUNWIND_INCLUDE_TESTS=OFF
+        -DLIBUNWIND_INSTALL_HEADERS=OFF
+        "-DLIBUNWIND_INSTALL_LIBRARY_DIR=${builtins_lib}/${triple}"
+        # DESIGN: the try-compiles of the runtimes link nothing, so the
+        # probes for libdl and libpthread pass on any system, and libunwind
+        # then asks every link that takes it for both. glibc 2.34 and newer
+        # hold dladdr, dlsym and the pthread functions in libc itself.
+        -DLIBUNWIND_HAS_DL_LIB=OFF
+        -DLIBUNWIND_HAS_PTHREAD_LIB=OFF
+        TARGETS install-unwind)
+endfunction()
+
+# Set <out> to the names that llvm-nm prints for <file> with the options
+# that follow, without the symbol version of a name of a shared library.
+function(nm_names out file)
+    execute_process(COMMAND "${release_bin}/llvm-nm" --format=just-symbols
+                            ${ARGN} "${file}"
+                    OUTPUT_VARIABLE text ERROR_VARIABLE err RESULT_VARIABLE status)
+    if(NOT status EQUAL 0)
+        message(FATAL_ERROR "llvm-nm cannot read ${file}: ${err}")
+    endif()
+    string(REPLACE "\n" ";" lines "${text}")
+    set(names "")
+    foreach(line IN LISTS lines)
+        # An archive heads the names of each member with its name.
+        if(line STREQUAL "" OR line MATCHES ":$")
+            continue()
+        endif()
+        string(REGEX REPLACE "@.*$" "" line "${line}")
+        list(APPEND names "${line}")
+    endforeach()
+    list(REMOVE_DUPLICATES names)
+    set(${out} "${names}" PARENT_SCOPE)
+endfunction()
+
+# Refuse the libunwind.a <library> of <arch> unless it defines the
+# functions that ASan calls, every name it leaves undefined is one that the
+# libc of the glibc sysroot <sysroot> defines, and no member asks the
+# linker for a library. libc there is libc.so.6 with libc_nonshared.a.
+function(check_unwind library sysroot arch)
+    set(libc "${sysroot}/lib/${arch}-linux-gnu/libc.so.6")
+    set(nonshared "${sysroot}/usr/lib/${arch}-linux-gnu/libc_nonshared.a")
+    foreach(file "${library}" "${libc}" "${nonshared}")
+        if(NOT EXISTS "${file}")
+            message(FATAL_ERROR "${file} is missing")
+        endif()
+    endforeach()
+    get_filename_component(name "${library}" NAME)
+    nm_names(defined "${library}" --defined-only)
+    foreach(entry IN LISTS unwind_entry_points)
+        if(NOT entry IN_LIST defined)
+            message(FATAL_ERROR "${library} does not define ${entry}")
+        endif()
+    endforeach()
+    nm_names(needed "${library}" --undefined-only)
+    nm_names(libc_names "${libc}" --dynamic --defined-only)
+    nm_names(nonshared_names "${nonshared}" --defined-only)
+    list(LENGTH needed count)
+    list(REMOVE_ITEM needed ${defined} ${libc_names} ${nonshared_names})
+    if(needed)
+        message(FATAL_ERROR "${library} needs ${needed}, which the libc of "
+                            "${sysroot} does not define")
+    endif()
+    execute_process(COMMAND "${release_bin}/llvm-readelf" --dependent-libraries
+                            "${library}"
+                    OUTPUT_VARIABLE text ERROR_VARIABLE err RESULT_VARIABLE status)
+    if(NOT status EQUAL 0)
+        message(FATAL_ERROR "llvm-readelf cannot read ${library}: ${err}")
+    endif()
+    string(REGEX MATCHALL "\n *\\[ *[0-9a-f]+\\] +[^\n]+" lines "${text}")
+    set(libraries "")
+    foreach(line IN LISTS lines)
+        string(REGEX REPLACE "^\n *\\[ *[0-9a-f]+\\] +" "" line "${line}")
+        list(APPEND libraries "${line}")
+    endforeach()
+    if(libraries)
+        list(REMOVE_DUPLICATES libraries)
+        message(FATAL_ERROR "${library} asks the linker for the library ${libraries}")
+    endif()
+    message(STATUS "${arch}: ${name} defines ${unwind_entry_points}, and libc "
+                   "defines the ${count} names it needs")
 endfunction()
 
 # Refuse the builtins unless each target has its files, of its format.
@@ -1058,6 +1181,7 @@ function(check_builtins lib)
             list(APPEND expect
                  "${arch}-unknown-linux-gnu/libclang_rt.${name}.a=${format}")
         endforeach()
+        list(APPEND expect "${arch}-unknown-linux-gnu/${unwind_library}=${format}")
     endforeach()
     foreach(name IN LISTS windows_x86_64_sanitizers)
         list(APPEND expect "x86_64-pc-windows-msvc/${name}=coff-x86-64")
@@ -1109,6 +1233,9 @@ endfunction()
 if(STEP STREQUAL "check-builtins")
     check_builtins("${BUILTINS}")
     return()
+elseif(STEP STREQUAL "check-unwind")
+    check_unwind("${LIBRARY}" "${SYSROOT}" "${ARCH}")
+    return()
 elseif(STEP STREQUAL "glibc-sysroot")
     prepare_glibc("${ARCH}" glibc)
     say("${glibc}")
@@ -1123,8 +1250,14 @@ if(STEP STREQUAL "builtins")
     foreach(host IN LISTS HOSTS)
         build_builtins("${host}")
         build_sanitizers("${host}")
+        build_unwind("${host}")
     endforeach()
-    check_builtins("${builtins_install}/lib/clang/${major}/lib")
+    check_builtins("${builtins_lib}")
+    foreach(arch x86_64 aarch64)
+        prepare_glibc("${arch}" glibc)
+        check_unwind("${builtins_lib}/${arch}-unknown-linux-gnu/${unwind_library}"
+                     "${glibc}" "${arch}")
+    endforeach()
     write_stamp("${builtins_stamp}")
     message(STATUS "${builtins_install} holds the builtins of the six targets")
     return()

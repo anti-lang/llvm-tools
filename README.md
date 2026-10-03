@@ -20,7 +20,7 @@ Each release holds these files.
 | File | Contents |
 |---|---|
 | `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the seven tools, `licenses/`, `VERSION` |
-| `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers, the builtins and the sanitizer runtimes, `licenses/`, `VERSION` |
+| `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers, the builtins, the sanitizer runtimes and `libunwind.a`, `licenses/`, `VERSION` |
 | `SHA256SUMS` | The SHA-256 digest of each archive |
 | `SHA256SUMS.sig` | An ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS` |
 
@@ -40,6 +40,13 @@ that glibc and every newer one. `windows-x86_64` has both, with ASan as a DLL.
 `windows-arm64` has UBSan alone, since compiler-rt 23.1.1 builds no ASan for Windows on
 arm64.
 
+`libunwind.a`, LLVM's unwinder, lies beside the sanitizer runtimes of
+`x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`. ASan there calls
+`_Unwind_Backtrace` and `_Unwind_GetIP`, which glibc leaves to GCC's `libgcc_s`. It is
+static, built from the same source against the same glibc 2.35, and needs nothing outside
+libc. macOS and Windows have none, since ASan there unwinds with the unwinder of the
+system.
+
 The ASan runtimes of x86_64 Linux and x86_64 Windows are built as upstream builds them
 and are unverified on real hardware. The only x86_64 here is emulation, where the
 allocator of ASan is known to stop. The first release-day run of the workflow on
@@ -55,6 +62,8 @@ and import system DLLs alone.
 
 ## Changes
 
+- `23.1.1-anti.5`: the clang archives carry `libunwind.a` beside the sanitizer runtimes
+  of Linux on glibc, the unwinder that ASan calls there.
 - `23.1.1-anti.4`: the tools archives carry `opt` and `llc` beside `llvm-mc`, the
   optimizer and the code generator of the same source.
 - `23.1.1-anti.3`: the clang archives carry the sanitizer runtimes of Linux on glibc and
