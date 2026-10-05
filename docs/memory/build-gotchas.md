@@ -13,6 +13,13 @@ The musl libunwind that links the tools still carries `.deplibs` for `dl` and
 `pthread`. musl's `libdl.a` and `libpthread.a` are empty, so the links work. It is not
 shipped, and nobody has decided to change it.
 
+## Names that the linker defines
+
+The Linux profile runtime takes `__ehdr_start` from the linker, a strong hidden
+reference. `check-profile` accepts the names in `profile_linker_names` and skips weak
+undefined names, such as `__start___llvm_prf_cnts`. A new runtime check that compares
+undefined names with libc needs the same two exceptions.
+
 ## The glibc sysroot of x86_64 lacks its dynamic loader path
 
 `usr/lib/x86_64-linux-gnu/libc.so` in `build/sysroot/glibc-x86_64` names
