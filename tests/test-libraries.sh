@@ -7,11 +7,11 @@
 
 bin=$(release_bin)
 clang="$bin/clang"
-tools="lld llvm-mc opt llc llvm-ar llvm-objdump llvm-readobj clang"
+tools="$(recipe "$root" -DSTEP=tools) $(recipe "$root" -DSTEP=compiler)"
 
-# Fill directory $1 with the seven tool names and clang, each a copy of
+# Fill directory $1 with the tools of hosts.toml and clang, each a copy of
 # file $2 with the suffix $3.
-seven() {
+binaries() {
     mkdir -p "$1"
     for tool in $tools; do
         cp "$2" "$1/$tool$3"
@@ -32,8 +32,8 @@ elf="--target=x86_64-unknown-linux-musl -nostdlib -fuse-ld=lld -Wl,-e,main"
 "$clang" $elf -shared -o "$work/libdep.so" "$work/dep.c"
 "$clang" $elf -o "$work/elf-dynamic" "$work/uses-dep.c" -L"$work" -ldep
 "$clang" $elf -static -o "$work/elf-static" "$work/alone.c"
-seven "$work/linux-static" "$work/elf-static" ""
-seven "$work/linux-dynamic" "$work/elf-dynamic" ""
+binaries "$work/linux-static" "$work/elf-static" ""
+binaries "$work/linux-dynamic" "$work/elf-dynamic" ""
 check linux-x86_64 "$work/linux-static" >/dev/null ||
     fail "a static Linux tool was refused"
 expect_refusal "libdep.so" check linux-x86_64 "$work/linux-dynamic"
@@ -47,8 +47,8 @@ macho="-arch arm64 -isysroot $sdk -fuse-ld=lld -mmacos-version-min=11.0"
     -o "$work/libdep.dylib" "$work/dep.c"
 "$clang" $macho -o "$work/macho-dynamic" "$work/uses-dep.c" -L"$work" -ldep
 "$clang" $macho -o "$work/macho-system" "$work/alone.c"
-seven "$work/macos-system" "$work/macho-system" ""
-seven "$work/macos-dynamic" "$work/macho-dynamic" ""
+binaries "$work/macos-system" "$work/macho-system" ""
+binaries "$work/macos-dynamic" "$work/macho-dynamic" ""
 check macos-arm64 "$work/macos-system" >/dev/null ||
     fail "a macOS tool that needs libSystem alone was refused"
 expect_refusal "/opt/dep/libdep.dylib" check macos-arm64 "$work/macos-dynamic"
@@ -57,7 +57,7 @@ expect_refusal "/opt/dep/libdep.dylib" check macos-arm64 "$work/macos-dynamic"
 # to start on an older one, so its minos is refused.
 "$clang" -arch arm64 -isysroot "$sdk" -fuse-ld=lld -mmacos-version-min=13.0 \
     -o "$work/macho-newer" "$work/alone.c"
-seven "$work/macos-newer" "$work/macho-newer" ""
+binaries "$work/macos-newer" "$work/macho-newer" ""
 expect_refusal "minos 13.0" check macos-arm64 "$work/macos-newer"
 
 # Windows: an import of KERNEL32.dll passes, one of dep.dll does not.
@@ -74,8 +74,8 @@ pe="--target=x86_64-pc-windows-msvc -nostdlib -fuse-ld=lld -Wl,-entry:main -Wl,-
 "$clang" $pe -o "$work/pe-system.exe" "$work/win-alone.c" "$work/kernel32.lib"
 "$clang" $pe -o "$work/pe-dynamic.exe" "$work/win-dep.c" "$work/dep.lib" \
     "$work/kernel32.lib"
-seven "$work/windows-system" "$work/pe-system.exe" ".exe"
-seven "$work/windows-dynamic" "$work/pe-dynamic.exe" ".exe"
+binaries "$work/windows-system" "$work/pe-system.exe" ".exe"
+binaries "$work/windows-dynamic" "$work/pe-dynamic.exe" ".exe"
 check windows-x86_64 "$work/windows-system" >/dev/null ||
     fail "a Windows tool that imports KERNEL32.dll alone was refused"
 expect_refusal "dep.dll" check windows-x86_64 "$work/windows-dynamic"

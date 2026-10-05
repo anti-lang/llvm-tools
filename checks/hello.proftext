@@ -1,0 +1,15 @@
+# The profile that the recipe merges with llvm-profdata of a host and that
+# opt of the host reads with checks/hello.ll. It is the profile of one run
+# of @main. 784007056844089447 is the hash of the control flow of @main
+# after the pipeline default<O2> inlines @sum into it, and the two counters
+# are those of the loop and of the entry. A change of hello.ll changes the
+# hash, and opt then drops the profile, which the check refuses.
+:ir
+main
+# Func Hash:
+784007056844089447
+# Num Counters:
+2
+# Counter Values:
+9
+1

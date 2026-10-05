@@ -4,8 +4,9 @@
 # its builtins. Linux on glibc, windows-x86_64 and macOS also have ASan
 # and UBSan. windows-arm64 has UBSan alone, since compiler-rt 23.1.1 gives
 # Windows on arm64 no ASan. Linux on glibc also has libunwind, the unwinder
-# of ASan there. The release clang writes a small object of each format for
-# the fixtures.
+# of ASan there. All seven targets have the profile runtime, which a program
+# that -fprofile-generate instruments links. The release clang writes a
+# small object of each format for the fixtures.
 . "$(dirname "$0")/lib.sh"
 
 bin=$(release_bin)
@@ -31,19 +32,21 @@ plain() {
     object "$1" "$tree/$2"
 }
 
-# The start files and builtins of both musl targets.
+# The start files, builtins and profile runtime of both musl targets.
 for arch in x86_64 aarch64; do
     archive $arch-unknown-linux-musl $arch-unknown-linux-musl/libclang_rt.builtins.a
+    archive $arch-unknown-linux-musl $arch-unknown-linux-musl/libclang_rt.profile.a
     plain $arch-unknown-linux-musl $arch-unknown-linux-musl/clang_rt.crtbegin.o
     plain $arch-unknown-linux-musl $arch-unknown-linux-musl/clang_rt.crtend.o
 done
 
 # The static sanitizer runtimes of both glibc targets, the symbol lists
-# that clang passes to the linker beside them, and libunwind.
+# that clang passes to the linker beside them, libunwind and the profile
+# runtime.
 for arch in x86_64 aarch64; do
     gnu=$arch-unknown-linux-gnu
     for name in asan asan_cxx asan_static asan-preinit ubsan_standalone \
-                ubsan_standalone_cxx; do
+                ubsan_standalone_cxx profile; do
         archive $gnu $gnu/libclang_rt.$name.a
     done
     archive $gnu $gnu/libunwind.a
@@ -64,10 +67,10 @@ printf 'LIBRARY clang_rt.asan_dynamic.dll\nEXPORTS\n__asan_init\n' > "$work/asan
 "$bin/llvm-dlltool" -m i386:x86-64 -d "$work/asan.def" \
     -l "$tree/$x64/clang_rt.asan_dynamic.lib"
 for name in asan_dynamic_runtime_thunk asan_static_runtime_thunk \
-            ubsan_standalone ubsan_standalone_cxx; do
+            ubsan_standalone ubsan_standalone_cxx profile; do
     archive $x64 $x64/clang_rt.$name.lib
 done
-for name in ubsan_standalone ubsan_standalone_cxx; do
+for name in ubsan_standalone ubsan_standalone_cxx profile; do
     archive $arm $arm/clang_rt.$name.lib
 done
 
@@ -76,7 +79,7 @@ object arm64-apple-macos11 "$work/arm64.o"
 object x86_64-apple-macos11 "$work/x86_64.o"
 mkdir -p "$tree/darwin"
 for name in libclang_rt.osx.a libclang_rt.asan_osx_dynamic.dylib \
-            libclang_rt.ubsan_osx_dynamic.dylib; do
+            libclang_rt.ubsan_osx_dynamic.dylib libclang_rt.profile_osx.a; do
     "$bin/llvm-lipo" -create "$work/arm64.o" "$work/x86_64.o" \
         -output "$tree/darwin/$name"
 done
@@ -113,6 +116,35 @@ mv "$work/kept.a" "$tree/x86_64-unknown-linux-gnu/libunwind.a"
 archive x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu/libunwind.a
 expect_refusal "elf64-littleaarch64" check
 archive aarch64-unknown-linux-gnu aarch64-unknown-linux-gnu/libunwind.a
+
+# The profile runtime of each of the seven targets is refused by name when
+# it is missing.
+for name in x86_64-unknown-linux-musl/libclang_rt.profile.a \
+            aarch64-unknown-linux-musl/libclang_rt.profile.a \
+            x86_64-unknown-linux-gnu/libclang_rt.profile.a \
+            aarch64-unknown-linux-gnu/libclang_rt.profile.a \
+            x86_64-pc-windows-msvc/clang_rt.profile.lib \
+            aarch64-pc-windows-msvc/clang_rt.profile.lib \
+            darwin/libclang_rt.profile_osx.a; do
+    mv "$tree/$name" "$work/kept"
+    expect_refusal "$name" check
+    mv "$work/kept" "$tree/$name"
+done
+
+# A profile runtime of the other processor, and a Darwin one of arm64
+# alone, are refused.
+archive aarch64-unknown-linux-musl x86_64-unknown-linux-musl/libclang_rt.profile.a
+expect_refusal "elf64-x86-64" check
+archive x86_64-unknown-linux-musl x86_64-unknown-linux-musl/libclang_rt.profile.a
+
+archive $arm $x64/clang_rt.profile.lib
+expect_refusal "coff-x86-64" check
+archive $x64 $x64/clang_rt.profile.lib
+
+"$bin/llvm-lipo" -create "$work/arm64.o" -output "$tree/darwin/libclang_rt.profile_osx.a"
+expect_refusal "darwin/libclang_rt.profile_osx.a holds 'arm64'" check
+"$bin/llvm-lipo" -create "$work/arm64.o" "$work/x86_64.o" \
+    -output "$tree/darwin/libclang_rt.profile_osx.a"
 
 check >/dev/null || fail "the restored tree was refused"
 finished=yes

@@ -60,7 +60,7 @@ build_number=$(cat "$root/pins/build-number")
 # of the rebuilds of that version, as in 23.1.1-anti.1.
 tag="$version-anti.$build_number"
 
-# The kinds of archive that each host has: the seven tools, and clang.
+# The kinds of archive that each host has: the eight tools, and clang.
 archive_kinds="llvm-tools clang"
 
 # The file name of the archive of <kind> for <host>.

@@ -1,4 +1,4 @@
-# Build the seven LLVM tools and clang of one host from the pinned LLVM
+# Build the eight LLVM tools and clang of one host from the pinned LLVM
 # source, or the compiler-rt builtins of all six targets.
 #
 #   cmake -DHOST=<host> [-DRUNNER=<command>] [-DACCEPT_LICENSE=yes] \
@@ -9,17 +9,18 @@
 # release that pins/release.toml names for this machine. The recipe checks
 # the digest and the Sigstore attestation of that archive and the digest of
 # the source. It builds lld, llvm-mc, opt, llc, llvm-ar, llvm-objdump,
-# llvm-readobj and clang into build/<host>/llvm/bin, with the built-in
-# headers of clang beside them. It refuses a binary that names a shared
-# library outside the system set of its host, and one that reports another
-# version. opt and llc of a host that runs on this machine compile
-# checks/hello.ll for the six triples. It then writes build/<host>/recipe,
-# which scripts/pack.sh reads.
+# llvm-readobj, llvm-profdata and clang into build/<host>/llvm/bin, with the
+# built-in headers of clang beside them. It refuses a binary that names a
+# shared library outside the system set of its host, and one that reports
+# another version. opt and llc of a host that runs on this machine compile
+# checks/hello.ll for the six triples, and opt applies the profile that its
+# llvm-profdata merges from checks/hello.proftext. It then writes
+# build/<host>/recipe, which scripts/pack.sh reads.
 #
 # STEP=builtins builds the compiler-rt builtins of the six targets, the
-# sanitizer runtimes and the libunwind of Linux on glibc into
-# build/builtins, which every clang archive carries, and writes
-# build/builtins/recipe.
+# sanitizer runtimes, the libunwind of Linux on glibc and the profile
+# runtimes into build/builtins, which every clang archive carries, and
+# writes build/builtins/recipe.
 #
 # RUNNER is a command that runs a binary of another operating system.
 # ACCEPT_LICENSE=yes lets xwin download the Microsoft CRT and Windows SDK
@@ -33,12 +34,16 @@
 #   check-libraries         check the shared libraries of the binaries in BIN
 #   check-version           check the version the binaries in BIN report
 #   check-codegen           compile checks/hello.ll with opt and llc in BIN
-#                           for the six triples, into OUT
+#                           for the six triples, and with the profile that
+#                           llvm-profdata in BIN merges, into OUT
 #   check-link-version      check the ld64 version that clang in BIN records
 #   check-builtins          check the compiler-rt runtimes in BUILTINS, the
 #                           lib directory of a resource directory
 #   check-unwind            check that LIBRARY, a libunwind.a of ARCH, needs
 #                           nothing but the libc of the glibc sysroot SYSROOT
+#   check-profile           check LIBRARY, the profile runtime of TARGET, a
+#                           directory of the lib directory, against the libc
+#                           of SYSROOT on Linux
 #   glibc-sysroot           unpack the glibc sysroot of ARCH and print it
 cmake_minimum_required(VERSION 3.25)
 
@@ -260,7 +265,7 @@ function(setup_host host)
     endforeach()
 endfunction()
 
-if(NOT STEP MATCHES "^((check-)?builtins|check-unwind|glibc-sysroot)$")
+if(NOT STEP MATCHES "^((check-)?builtins|check-unwind|check-profile|glibc-sysroot)$")
     # Every other step works on one host.
     if(NOT HOST IN_LIST HOSTS)
         message(FATAL_ERROR "HOST is '${HOST}', and hosts.toml names ${HOSTS}")
@@ -486,11 +491,19 @@ function(run_or_stop name)
         message(FATAL_ERROR "${name} failed on ${HOST}: ${status} ${err}")
     endif()
     set(out "${out}" PARENT_SCOPE)
+    set(err "${err}" PARENT_SCOPE)
 endfunction()
 
 # Refuse opt and llc in bin unless checks/hello.ll goes through both for
 # each triple of antic, and llvm-readobj in bin reads each object in the
-# format of its triple. The bitcode and the objects go into dir.
+# format of its triple. llvm-profdata in bin then merges
+# checks/hello.proftext, and opt must apply that profile to hello.ll in a
+# module that verifies. The bitcode, the objects, the profile and the
+# module go into dir.
+#
+# DESIGN: opt drops a profile whose hash does not match a function with a
+# warning and status 0. The check reads the entry count of @main that the
+# profile gives, so a profile that opt ignores is refused.
 #
 # DESIGN: the check runs the tools of a host that runs on this machine,
 # natively or through Rosetta. RUNNER passes a tool its arguments and
@@ -502,7 +515,7 @@ function(check_codegen bin dir)
         message(FATAL_ERROR "the tools of ${HOST} do not run on ${machine}, and "
                             "the codegen check runs them here")
     endif()
-    foreach(tool opt llc llvm-readobj)
+    foreach(tool opt llc llvm-readobj llvm-profdata)
         if(NOT EXISTS "${bin}/${tool}${exe}")
             message(FATAL_ERROR "${tool}${exe} is missing in ${bin}")
         endif()
@@ -530,6 +543,22 @@ function(check_codegen bin dir)
         endif()
         message(STATUS "hello.o for ${triple}: ${found}")
     endforeach()
+    set(profile "${dir}/hello.profdata")
+    set(applied "${dir}/hello-profile.ll")
+    run_or_stop("llvm-profdata merge" ${prefix} "${bin}/llvm-profdata${exe}" merge
+                -o "${profile}" "${root}/checks/hello.proftext")
+    run_or_stop("opt -profile-file" ${prefix} "${bin}/opt${exe}" "-passes=${passes}"
+                -pgo-kind=pgo-instr-use-pipeline "-profile-file=${profile}" -S
+                -o "${applied}" "${root}/checks/hello.ll")
+    file(READ "${applied}" text)
+    if(NOT text MATCHES "!\"function_entry_count\", i64 1}")
+        message(FATAL_ERROR "opt does not apply the profile of hello.proftext to "
+                            "hello.ll on ${HOST}: ${err}")
+    endif()
+    run_or_stop("opt -passes=verify" ${prefix} "${bin}/opt${exe}" -passes=verify
+                -disable-output "${applied}")
+    message(STATUS "opt applies the profile of hello.proftext that llvm-profdata "
+                   "merges to hello.ll, and the module verifies")
 endfunction()
 
 # Refuse a clang in bin that records another ld64 version than
@@ -573,7 +602,7 @@ elseif(STEP STREQUAL "check-codegen")
     endif()
     check_codegen("${BIN}" "${OUT}")
     return()
-elseif(NOT STEP MATCHES "^(all|builtins|check-builtins|check-unwind|glibc-sysroot)$")
+elseif(NOT STEP MATCHES "^(all|builtins|check-builtins|check-unwind|check-profile|glibc-sysroot)$")
     message(FATAL_ERROR "STEP is '${STEP}', which the recipe does not know")
 endif()
 
@@ -802,6 +831,7 @@ endif()
 # machine into every binary. The map turns the build tree into a dot, and
 # a check below refuses a binary that still holds it.
 set(prefix_map "-ffile-prefix-map=${build_root}=.")
+string(REGEX REPLACE "([][+.*()^$?|\\\\])" "\\\\\\1" build_root_regex "${build_root}")
 
 # Write the toolchain file of the host that setup_host named last to
 # <file>. RUNTIMES writes the one that builds the runtimes of a target,
@@ -906,6 +936,23 @@ set(windows_arm64_sanitizers clang_rt.ubsan_standalone.lib
 # functions it calls. It lies beside the sanitizer runtimes of its target.
 set(unwind_library libunwind.a)
 set(unwind_entry_points _Unwind_Backtrace _Unwind_GetIP)
+
+# The profile runtime of each target that antic links, with its format, and
+# the universal one of macOS. A program that -fprofile-generate instruments
+# references the two names, and calls the second to write its counters.
+set(profile_runtimes
+    "x86_64-unknown-linux-musl/libclang_rt.profile.a=elf64-x86-64"
+    "aarch64-unknown-linux-musl/libclang_rt.profile.a=elf64-littleaarch64"
+    "x86_64-unknown-linux-gnu/libclang_rt.profile.a=elf64-x86-64"
+    "aarch64-unknown-linux-gnu/libclang_rt.profile.a=elf64-littleaarch64"
+    "x86_64-pc-windows-msvc/clang_rt.profile.lib=coff-x86-64"
+    "aarch64-pc-windows-msvc/clang_rt.profile.lib=coff-arm64")
+set(darwin_profile_runtime libclang_rt.profile_osx.a)
+set(profile_entry_points __llvm_profile_runtime __llvm_profile_write_file)
+# The name that the Linux runtime takes from the linker rather than libc:
+# the ELF header of the program, through which it reads the build ID. lld
+# and GNU ld define it.
+set(profile_linker_names __ehdr_start)
 
 # The options of compiler-rt that build the builtins and nothing else.
 set(builtins_options
@@ -1087,6 +1134,85 @@ function(build_unwind host)
         TARGETS install-unwind)
 endfunction()
 
+# The options of compiler-rt that build the profile runtime and no other.
+# The options of the profile runtime itself keep upstream's defaults.
+set(profile_options
+    -DCOMPILER_RT_BUILD_BUILTINS=OFF
+    -DCOMPILER_RT_BUILD_SANITIZERS=OFF
+    -DCOMPILER_RT_BUILD_XRAY=OFF
+    -DCOMPILER_RT_BUILD_LIBFUZZER=OFF
+    -DCOMPILER_RT_BUILD_PROFILE=ON
+    -DCOMPILER_RT_BUILD_MEMPROF=OFF
+    -DCOMPILER_RT_BUILD_ORC=OFF
+    -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF
+    -DCOMPILER_RT_BUILD_GWP_ASAN=OFF
+    -DCOMPILER_RT_BUILD_CRT=OFF
+    -DCOMPILER_RT_INCLUDE_TESTS=OFF)
+
+# Build the profile runtime of compiler-rt for the targets of <host> into
+# the install tree of the builtins.
+#
+# DESIGN: a program that -fprofile-generate instruments calls
+# __llvm_profile_* of the profile runtime to write its counters at exit.
+# Each target gets it as its other runtimes are built. A musl host builds
+# it for musl against its musl sysroot, as the builtins, and for glibc
+# against the glibc 2.35 sysroot, as the sanitizer runtimes. Windows builds
+# it through the xwin CRT and SDK, and macOS as one universal archive for
+# both processors against the SDK, as the Darwin builtins. Each build has a
+# directory of its own, so the builtins, the sanitizer runtimes and
+# libunwind stay those of a build without it.
+function(build_profile host)
+    setup_host("${host}")
+    if(host STREQUAL "macos-x86_64")
+        return()
+    endif()
+    prepare_sysroot()
+    set(work "${builtins_root}/${host}-profile")
+    set(toolchain "${work}/toolchain.cmake")
+    set(options "-DCMAKE_TOOLCHAIN_FILE=${toolchain}" -DCMAKE_BUILD_TYPE=Release
+        -DLLVM_ENABLE_RUNTIMES=compiler-rt
+        "-DCMAKE_INSTALL_PREFIX=${builtins_install}"
+        "-DCOMPILER_RT_INSTALL_PATH=${builtins_install}/lib/clang/${major}"
+        -DLLVM_INCLUDE_TESTS=OFF ${profile_options})
+    write_toolchain("${toolchain}" RUNTIMES)
+    if(os STREQUAL "macos")
+        set(cache "${work}/cache.cmake")
+        file(WRITE "${cache}"
+             "set(DARWIN_osx_ARCHS \"arm64;x86_64\" CACHE STRING \"\" FORCE)\n")
+        cmake_build("${work}/build" "${source}/runtimes" OPTIONS -C "${cache}"
+            ${options} -DCOMPILER_RT_ENABLE_IOS=OFF -DCOMPILER_RT_ENABLE_WATCHOS=OFF
+            -DCOMPILER_RT_ENABLE_TVOS=OFF -DCOMPILER_RT_ENABLE_XROS=OFF
+            "-DDARWIN_macosx_CACHED_SYSROOT=${sysroot}"
+            "-DDARWIN_osx_SYSROOT=${sysroot}"
+            TARGETS install-profile)
+        return()
+    endif()
+    list(APPEND options -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON
+         -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON)
+    set(target_options "-DLLVM_DEFAULT_TARGET_TRIPLE=${triple}")
+    if(os STREQUAL "windows")
+        # compiler-rt reads the target of a default-target build from
+        # CMake, which WinMsvc.cmake gives clang-cl as a flag alone.
+        list(APPEND target_options ${host_flags}
+             "-DCMAKE_C_COMPILER_TARGET=${triple}"
+             "-DCMAKE_CXX_COMPILER_TARGET=${triple}"
+             "-DCMAKE_ASM_COMPILER_TARGET=${triple}")
+    endif()
+    cmake_build("${work}/build" "${source}/runtimes" OPTIONS ${options}
+                ${target_options} TARGETS install-profile)
+    if(os STREQUAL "linux")
+        set(work "${builtins_root}/${host}-profile-glibc")
+        set(toolchain "${work}/toolchain.cmake")
+        list(TRANSFORM options REPLACE "^-DCMAKE_TOOLCHAIN_FILE=.*$"
+             "-DCMAKE_TOOLCHAIN_FILE=${toolchain}")
+        prepare_glibc("${arch}" sysroot)
+        set(triple "${arch}-unknown-linux-gnu")
+        write_toolchain("${toolchain}" RUNTIMES)
+        cmake_build("${work}/build" "${source}/runtimes" OPTIONS ${options}
+                    "-DLLVM_DEFAULT_TARGET_TRIPLE=${triple}" TARGETS install-profile)
+    endif()
+endfunction()
+
 # Set <out> to the names that llvm-nm prints for <file> with the options
 # that follow, without the symbol version of a name of a shared library.
 function(nm_names out file)
@@ -1138,6 +1264,14 @@ function(check_unwind library sysroot arch)
         message(FATAL_ERROR "${library} needs ${needed}, which the libc of "
                             "${sysroot} does not define")
     endif()
+    refuse_dependent_libraries("${library}")
+    message(STATUS "${arch}: ${name} defines ${unwind_entry_points}, and libc "
+                   "defines the ${count} names it needs")
+endfunction()
+
+# Refuse the ELF archive <library> when a member asks the linker for a
+# library through a .deplibs section.
+function(refuse_dependent_libraries library)
     execute_process(COMMAND "${release_bin}/llvm-readelf" --dependent-libraries
                             "${library}"
                     OUTPUT_VARIABLE text ERROR_VARIABLE err RESULT_VARIABLE status)
@@ -1154,8 +1288,121 @@ function(check_unwind library sysroot arch)
         list(REMOVE_DUPLICATES libraries)
         message(FATAL_ERROR "${library} asks the linker for the library ${libraries}")
     endif()
-    message(STATUS "${arch}: ${name} defines ${unwind_entry_points}, and libc "
-                   "defines the ${count} names it needs")
+endfunction()
+
+# Set <out> to the names that <file> leaves undefined and that a link must
+# define. A weak reference may stay undefined, and the linker defines the
+# bounds of a section that one names, so llvm-nm's w is left out.
+function(nm_strong_undefined out file)
+    execute_process(COMMAND "${release_bin}/llvm-nm" --format=posix --undefined-only
+                            "${file}"
+                    OUTPUT_VARIABLE text ERROR_VARIABLE err RESULT_VARIABLE status)
+    if(NOT status EQUAL 0)
+        message(FATAL_ERROR "llvm-nm cannot read ${file}: ${err}")
+    endif()
+    string(REPLACE "\n" ";" lines "${text}")
+    set(names "")
+    foreach(line IN LISTS lines)
+        if(line MATCHES "^([^ ]+) U( |$)")
+            string(REGEX REPLACE "@.*$" "" name "${CMAKE_MATCH_1}")
+            list(APPEND names "${name}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES names)
+    set(${out} "${names}" PARENT_SCOPE)
+endfunction()
+
+# Refuse the profile runtime <library> of <target>, a directory of the lib
+# directory of a resource directory. It must define profile_entry_points,
+# for arm64 and x86_64 alike on darwin. On Linux every name it must take
+# from outside is one that the C library of the sysroot <sysroot> or the
+# linker defines, and no member asks the linker for a library: libc.so.6 with
+# libc_nonshared.a for glibc, libc.a for musl. No runtime holds the path
+# of the build tree.
+function(check_profile library target sysroot)
+    if(NOT EXISTS "${library}")
+        message(FATAL_ERROR "${library} is missing")
+    endif()
+    set(slices "")
+    set(prefix "")
+    set(libc "")
+    if(target STREQUAL "darwin")
+        execute_process(COMMAND "${release_bin}/llvm-lipo" -archs "${library}"
+                        OUTPUT_VARIABLE archs OUTPUT_STRIP_TRAILING_WHITESPACE
+                        RESULT_VARIABLE status)
+        string(REPLACE " " ";" archs "${archs}")
+        list(SORT archs)
+        if(NOT status EQUAL 0 OR NOT archs STREQUAL "arm64;x86_64")
+            message(FATAL_ERROR "${library} holds '${archs}', not arm64 and x86_64")
+        endif()
+        set(slices arm64 x86_64)
+        # Mach-O names carry an underscore in front of the C name.
+        set(prefix "_")
+    elseif(target MATCHES "^(x86_64|aarch64)-unknown-linux-(gnu|musl)$")
+        set(arch "${CMAKE_MATCH_1}")
+        if(sysroot STREQUAL "")
+            message(FATAL_ERROR "the profile runtime of ${target} is checked "
+                                "against the libc of SYSROOT, which is not given")
+        endif()
+        if(CMAKE_MATCH_2 STREQUAL "gnu")
+            set(libc "${sysroot}/lib/${arch}-linux-gnu/libc.so.6"
+                "${sysroot}/usr/lib/${arch}-linux-gnu/libc_nonshared.a")
+        else()
+            set(libc "${sysroot}/usr/lib/libc.a")
+        endif()
+    elseif(NOT target MATCHES "^(x86_64|aarch64)-pc-windows-msvc$")
+        message(FATAL_ERROR "the clang archives carry no profile runtime of ${target}")
+    endif()
+    if(NOT slices)
+        set(slices all)
+    endif()
+    foreach(slice IN LISTS slices)
+        set(arch_option "")
+        set(of "")
+        if(NOT slice STREQUAL "all")
+            set(arch_option "--arch=${slice}")
+            set(of " for ${slice}")
+        endif()
+        nm_names(defined "${library}" --defined-only ${arch_option})
+        foreach(entry IN LISTS profile_entry_points)
+            if(NOT "${prefix}${entry}" IN_LIST defined)
+                message(FATAL_ERROR "${library} does not define ${entry}${of}")
+            endif()
+        endforeach()
+    endforeach()
+    string(JOIN " and " entries ${profile_entry_points})
+    get_filename_component(name "${library}" NAME)
+    set(needs "")
+    if(libc)
+        set(libc_names "")
+        foreach(file IN LISTS libc)
+            if(NOT EXISTS "${file}")
+                message(FATAL_ERROR "${file} is missing")
+            endif()
+            if(file MATCHES "\\.so")
+                nm_names(names "${file}" --dynamic --defined-only)
+            else()
+                nm_names(names "${file}" --defined-only)
+            endif()
+            list(APPEND libc_names ${names})
+        endforeach()
+        nm_strong_undefined(needed "${library}")
+        list(REMOVE_ITEM needed ${defined} ${profile_linker_names})
+        list(LENGTH needed count)
+        list(REMOVE_ITEM needed ${libc_names})
+        if(needed)
+            string(JOIN " " needed ${needed})
+            message(FATAL_ERROR "${library} needs ${needed}, which the libc of "
+                                "${sysroot} does not define")
+        endif()
+        refuse_dependent_libraries("${library}")
+        set(needs ", and libc defines the ${count} names it takes from outside")
+    endif()
+    file(STRINGS "${library}" leaked REGEX "${build_root_regex}" LIMIT_COUNT 1)
+    if(leaked)
+        message(FATAL_ERROR "${library} holds the path ${build_root}")
+    endif()
+    message(STATUS "${target}: ${name} defines ${entries}${needs}")
 endfunction()
 
 # Refuse the builtins unless each target has its files, of its format.
@@ -1189,6 +1436,7 @@ function(check_builtins lib)
     foreach(name IN LISTS windows_arm64_sanitizers)
         list(APPEND expect "aarch64-pc-windows-msvc/${name}=coff-arm64")
     endforeach()
+    list(APPEND expect ${profile_runtimes})
     foreach(arch x86_64 aarch64)
         foreach(name IN LISTS linux_sanitizer_symbols)
             set(syms "${arch}-unknown-linux-gnu/libclang_rt.${name}.a.syms")
@@ -1216,7 +1464,7 @@ function(check_builtins lib)
         message(STATUS "${name}: ${format}")
     endforeach()
     foreach(name libclang_rt.osx.a libclang_rt.asan_osx_dynamic.dylib
-            libclang_rt.ubsan_osx_dynamic.dylib)
+            libclang_rt.ubsan_osx_dynamic.dylib ${darwin_profile_runtime})
         execute_process(COMMAND "${release_bin}/llvm-lipo" -archs
                                 "${lib}/darwin/${name}"
                         OUTPUT_VARIABLE archs OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -1236,6 +1484,9 @@ if(STEP STREQUAL "check-builtins")
 elseif(STEP STREQUAL "check-unwind")
     check_unwind("${LIBRARY}" "${SYSROOT}" "${ARCH}")
     return()
+elseif(STEP STREQUAL "check-profile")
+    check_profile("${LIBRARY}" "${TARGET}" "${SYSROOT}")
+    return()
 elseif(STEP STREQUAL "glibc-sysroot")
     prepare_glibc("${ARCH}" glibc)
     say("${glibc}")
@@ -1251,6 +1502,7 @@ if(STEP STREQUAL "builtins")
         build_builtins("${host}")
         build_sanitizers("${host}")
         build_unwind("${host}")
+        build_profile("${host}")
     endforeach()
     check_builtins("${builtins_lib}")
     foreach(arch x86_64 aarch64)
@@ -1258,6 +1510,24 @@ if(STEP STREQUAL "builtins")
         check_unwind("${builtins_lib}/${arch}-unknown-linux-gnu/${unwind_library}"
                      "${glibc}" "${arch}")
     endforeach()
+    # The sysroot of each Linux target: that of its musl host, or glibc.
+    foreach(row IN LISTS profile_runtimes)
+        string(REGEX REPLACE "=.*$" "" name "${row}")
+        get_filename_component(target "${name}" DIRECTORY)
+        set(profile_sysroot "")
+        if(target MATCHES "^([^-]+)-unknown-linux-gnu$")
+            prepare_glibc("${CMAKE_MATCH_1}" profile_sysroot)
+        elseif(target MATCHES "-linux-musl$")
+            foreach(host IN LISTS HOSTS)
+                setup_host("${host}")
+                if(triple STREQUAL target)
+                    set(profile_sysroot "${sysroot}")
+                endif()
+            endforeach()
+        endif()
+        check_profile("${builtins_lib}/${name}" "${target}" "${profile_sysroot}")
+    endforeach()
+    check_profile("${builtins_lib}/darwin/${darwin_profile_runtime}" darwin "")
     write_stamp("${builtins_stamp}")
     message(STATUS "${builtins_install} holds the builtins of the six targets")
     return()
@@ -1396,13 +1666,12 @@ cmake_build("${work}/llvm" "${source}/llvm" OPTIONS
     -DLLVM_INCLUDE_DOCS=OFF
     ${host_flags}
     ${llvm_flags}
-    # Step 4. The seven tools, clang and its built-in headers, and nothing
+    # Step 4. The eight tools, clang and its built-in headers, and nothing
     # else.
     TARGETS ${BINARIES} clang-resource-headers)
 
 # Steps 5 and 6.
 check_libraries("${tools_bin}")
-string(REGEX REPLACE "([][+.*()^$?|\\\\])" "\\\\\\1" build_root_regex "${build_root}")
 foreach(tool IN LISTS BINARIES)
     file(STRINGS "${tools_bin}/${tool}${exe}" leaked
          REGEX "${build_root_regex}" LIMIT_COUNT 1)

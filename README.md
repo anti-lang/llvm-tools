@@ -1,12 +1,12 @@
 # llvm-tools
 
-The seven LLVM tools that Anti ships, `llvm-mc`, `lld`, `opt`, `llc`, `llvm-ar`,
-`llvm-objdump` and `llvm-readobj`, and the clang that builds Anti, for every host from
-the pinned LLVM source. The compiler that builds them is clang of the pinned LLVM
-release. Each host gets two archives, published as assets of a GitHub release: the
-tools, and clang with its built-in headers, the compiler-rt builtins of all six targets
-and the sanitizer runtimes. `antic` downloads the archives of its host and nothing else
-from LLVM.
+The eight LLVM tools that Anti ships, `llvm-mc`, `lld`, `opt`, `llc`, `llvm-ar`,
+`llvm-objdump`, `llvm-readobj` and `llvm-profdata`, and the clang that builds Anti, for
+every host from the pinned LLVM source. The compiler that builds them is clang of the
+pinned LLVM release. Each host gets two archives, published as assets of a GitHub
+release: the tools, and clang with its built-in headers, the compiler-rt builtins of all
+six targets, the sanitizer runtimes and the profile runtimes. `antic` downloads the
+archives of its host and nothing else from LLVM.
 
 ## Releases
 
@@ -19,8 +19,8 @@ Each release holds these files.
 
 | File | Contents |
 |---|---|
-| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the seven tools, `licenses/`, `VERSION` |
-| `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers, the builtins, the sanitizer runtimes and `libunwind.a`, `licenses/`, `VERSION` |
+| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the eight tools, `licenses/`, `VERSION` |
+| `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers, the builtins, the sanitizer runtimes, `libunwind.a` and the profile runtimes, `licenses/`, `VERSION` |
 | `SHA256SUMS` | The SHA-256 digest of each archive |
 | `SHA256SUMS.sig` | An ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS` |
 
@@ -47,6 +47,16 @@ static, built from the same source against the same glibc 2.35, and needs nothin
 libc. macOS and Windows have none, since ASan there unwinds with the unwinder of the
 system.
 
+The profile runtime of compiler-rt lies beside the builtins of each target that Anti
+links: `libclang_rt.profile.a` for the two musl and the two glibc targets,
+`clang_rt.profile.lib` for the two MSVC targets, and one universal
+`lib/clang/23/lib/darwin/libclang_rt.profile_osx.a` for both macOS processors. A program
+that `-fprofile-generate` instruments calls `__llvm_profile_*` from it to write its
+counters at exit, and `llvm-profdata merge` turns the `.profraw` files into the
+`.profdata` file that `opt` reads. Each is static and built as the other runtimes of its
+target are: musl against the musl sysroot, glibc against glibc 2.35, Windows through the
+CRT and SDK of xwin, and macOS against the SDK.
+
 The ASan runtimes of x86_64 Linux and x86_64 Windows are built as upstream builds them
 and are unverified on real hardware. The only x86_64 here is emulation, where the
 allocator of ASan is known to stop. The first release-day run of the workflow on
@@ -62,6 +72,8 @@ and import system DLLs alone.
 
 ## Changes
 
+- `23.1.1-anti.6`: the tools archives carry `llvm-profdata`, and the clang archives the
+  profile runtime of every target, the two parts of profile-guided optimisation.
 - `23.1.1-anti.5`: the clang archives carry `libunwind.a` beside the sanitizer runtimes
   of Linux on glibc, the unwinder that ASan calls there.
 - `23.1.1-anti.4`: the tools archives carry `opt` and `llc` beside `llvm-mc`, the
@@ -98,6 +110,7 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | `r` | Packs every host and publishes the release |
 | `build-llvm.cmake` | The recipe, which builds one host |
 | `checks/hello.ll` | The module that `opt` and `llc` compile for the six triples |
+| `checks/hello.proftext` | The profile of `hello.ll` that `llvm-profdata` merges and `opt` applies |
 | `hosts.toml` | Per host: triple, build machine, sysroot kind, CMake options |
 | `pins/llvm-version` | The LLVM version |
 | `pins/source.sha256` | The SHA-256 digest of the LLVM source archive |
@@ -131,7 +144,8 @@ machine that `LINUX_REMOTE` or `WINDOWS_REMOTE` names. `./c` sets them to
 machine needs `qemu-x86_64` through binfmt when its processor is arm64.
 `REMOTE_SSH_OPTIONS` passes options to ssh and scp. `opt` and `llc` of a host that runs
 on the build machine also compile `checks/hello.ll` for the six triples, and its
-`llvm-readobj` checks the format of each object.
+`llvm-readobj` checks the format of each object. Its `llvm-profdata` merges
+`checks/hello.proftext`, and its `opt` must apply that profile to `hello.ll`.
 
 Commit the recipe first, because `scripts/pack.sh` refuses a build of uncommitted files.
 Then build and publish:
