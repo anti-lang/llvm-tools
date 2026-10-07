@@ -32,6 +32,8 @@
 #   paths                   print the paths of HOST that other files read
 #   fetch-file              download URL to FILE and check SHA256
 #   check-libraries         check the shared libraries of the binaries in BIN
+#   check-stack             check the thread stack that the Linux binaries in
+#                           BIN ask for
 #   check-version           check the version the binaries in BIN report
 #   check-codegen           compile checks/hello.ll with opt and llc in BIN
 #                           for the six triples, and with the profile that
@@ -329,6 +331,13 @@ set(windows_formats_aarch64 coff-arm64)
 # reads otherwise. Without ld-classic, Xcode gave 27037.1.
 set(darwin_link_version 1267)
 
+# DESIGN: the stack of every thread of a Linux binary, in bytes. musl gives
+# a new thread a small default unless PT_GNU_STACK of the program asks for
+# more, and ThinLTO in ld.lld recursed past it in a worker thread. 8 MiB is
+# the stack LLVM gives its threads on Apple and the most musl takes from
+# the header.
+set(musl_thread_stack 8388608)
+
 # Refuse a binary in bin that is missing, of another format, or names a
 # shared library outside the system set. The Mac cannot run ldd on an ELF
 # file, so llvm-objdump reads the dynamic section of Linux binaries. A
@@ -406,6 +415,39 @@ function(check_libraries bin)
                                 "which is outside the system set of ${HOST}")
         endif()
         message(STATUS "${tool}${exe}: ${format}${minos}, no library outside the system set")
+    endforeach()
+endfunction()
+
+# Refuse a Linux binary in bin whose PT_GNU_STACK asks for less than
+# musl_thread_stack, or that has none. llvm-readobj of the release reads
+# the program headers, since the binaries need not run here.
+function(check_stack bin)
+    if(NOT os STREQUAL "linux")
+        message(FATAL_ERROR "${HOST} links no musl, and the stack check reads "
+                            "the binaries of a Linux host")
+    endif()
+    foreach(tool IN LISTS BINARIES)
+        set(file "${bin}/${tool}")
+        execute_process(COMMAND "${release_bin}/llvm-readobj" --program-headers
+                                "${file}"
+                        OUTPUT_VARIABLE headers RESULT_VARIABLE status)
+        if(NOT status EQUAL 0)
+            message(FATAL_ERROR "llvm-readobj cannot read ${file}")
+        endif()
+        string(FIND "${headers}" "Type: PT_GNU_STACK " at)
+        if(at LESS 0)
+            message(FATAL_ERROR "${tool} of ${HOST} has no PT_GNU_STACK, so its "
+                                "threads get the default stack of musl")
+        endif()
+        # The first MemSize after the type is that of the same header.
+        string(SUBSTRING "${headers}" ${at} -1 header)
+        string(REGEX MATCH "MemSize: ([0-9]+)" found "${header}")
+        set(size "${CMAKE_MATCH_1}")
+        if(size LESS musl_thread_stack)
+            message(FATAL_ERROR "${tool} of ${HOST} asks for a thread stack of "
+                                "${size} bytes, and the recipe takes ${musl_thread_stack}")
+        endif()
+        message(STATUS "${tool}: a thread stack of ${size} bytes")
     endforeach()
 endfunction()
 
@@ -589,6 +631,9 @@ endfunction()
 
 if(STEP STREQUAL "check-libraries")
     check_libraries("${BIN}")
+    return()
+elseif(STEP STREQUAL "check-stack")
+    check_stack("${BIN}")
     return()
 elseif(STEP STREQUAL "check-link-version")
     check_link_version("${BIN}")
@@ -872,12 +917,13 @@ set(CMAKE_ASM_FLAGS_INIT \"${prefix_map}\")
             # DESIGN: the binaries link libc++, libc++abi, libunwind and the
             # compiler-rt builtins built from the pinned source, and musl.
             # -static leaves no library to load, and -s drops the symbols.
+            # -z stack-size writes musl_thread_stack into PT_GNU_STACK.
             set(resource "${rt}/lib/clang/${major}")
             set(c_flags "-resource-dir=${resource} ${prefix_map}")
             string(APPEND text
 "set(CMAKE_C_FLAGS_INIT \"${c_flags}\")
 set(CMAKE_CXX_FLAGS_INIT \"${c_flags} -nostdinc++ -isystem ${rt}/include/${triple}/c++/v1 -isystem ${rt}/include/c++/v1\")
-set(CMAKE_EXE_LINKER_FLAGS_INIT \"-fuse-ld=lld -static -s -rtlib=compiler-rt -unwindlib=libunwind -stdlib=libc++ -L${rt}/lib/${triple}\")
+set(CMAKE_EXE_LINKER_FLAGS_INIT \"-fuse-ld=lld -static -s -Wl,-z,stack-size=${musl_thread_stack} -rtlib=compiler-rt -unwindlib=libunwind -stdlib=libc++ -L${rt}/lib/${triple}\")
 ")
         endif()
     elseif(os STREQUAL "macos")
@@ -1672,6 +1718,9 @@ cmake_build("${work}/llvm" "${source}/llvm" OPTIONS
 
 # Steps 5 and 6.
 check_libraries("${tools_bin}")
+if(os STREQUAL "linux")
+    check_stack("${tools_bin}")
+endif()
 foreach(tool IN LISTS BINARIES)
     file(STRINGS "${tools_bin}/${tool}${exe}" leaked
          REGEX "${build_root_regex}" LIMIT_COUNT 1)

@@ -64,14 +64,17 @@ allocator of ASan is known to stop. The first release-day run of the workflow on
 
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
 `windows-x86_64` and `windows-arm64`. The Linux binaries link musl, libc++ and zlib
-statically and name no shared library. The macOS binaries name `libSystem` and `libc++`
-of the system and record macOS 11.0 as their `minos`. Their clang records ld64 1267 as
-its default linker version, the one of `23.1.1-anti.3`, which the recipe pins rather than
-read from the Xcode of the build machine. The Windows binaries link the CRT statically
-and import system DLLs alone.
+statically and name no shared library. Each asks for a thread stack of 8 MiB in its
+`PT_GNU_STACK` header, which musl gives every thread it starts. The macOS binaries name
+`libSystem` and `libc++` of the system and record macOS 11.0 as their `minos`. Their
+clang records ld64 1267 as its default linker version, the one of `23.1.1-anti.3`, which
+the recipe pins rather than read from the Xcode of the build machine. The Windows
+binaries link the CRT statically and import system DLLs alone.
 
 ## Changes
 
+- `23.1.1-anti.7`: every Linux binary asks for a thread stack of 8 MiB, so ThinLTO in
+  `ld.lld` no longer overflows the small default stack of musl.
 - `23.1.1-anti.6`: the tools archives carry `llvm-profdata`, and the clang archives the
   profile runtime of every target, the two parts of profile-guided optimisation.
 - `23.1.1-anti.5`: the clang archives carry `libunwind.a` beside the sanitizer runtimes
