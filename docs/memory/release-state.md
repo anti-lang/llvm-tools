@@ -1,17 +1,16 @@
 # State of the releases
 
-As of 2026-10-07.
+As of 2026-10-08.
 
 - `23.1.1-anti.4` is published. Its tag names `449dca5`.
 - `23.1.1-anti.5` is published. Its tag names `5563e5c`.
-- `23.1.1-anti.6` is published. Its tag names `b9af7ef`, and antic pins it. The report
-  is `docs/reports/2026-10-05-llvm-tools-profile.md`.
-- `23.1.1-anti.7` is built and packed, not published. Every static musl binary asks for
-  a thread stack of 8 MiB in `PT_GNU_STACK`. The recipe is `e9e1888`, and the report is
-  `docs/reports/2026-10-07-llvm-tools-thread-stack.md`. The twelve archives lie in
-  `build/dist`. `./r` publishes them.
-- `main` holds the commits of anti.4 to anti.7, none pushed to `origin/main`. `./r`
-  pushes the tag alone.
+- `23.1.1-anti.6` is published. Its tag names `b9af7ef`. The report is
+  `docs/reports/2026-10-05-llvm-tools-profile.md`.
+- `23.1.1-anti.7` is published, on 2026-10-07. Its tag names `e9e1888`, and antic pins
+  it. Every static musl binary asks for a thread stack of 8 MiB in `PT_GNU_STACK`. The
+  report is `docs/reports/2026-10-07-llvm-tools-thread-stack.md`.
+- `main` is pushed to `origin/main`, on 2026-10-08. `./r` pushes the tag alone, so push
+  `main` after each release as well.
 - `build/dist-26b62fa` holds the archives of the first anti.4 build, unpublished.
 
 ## Open items
