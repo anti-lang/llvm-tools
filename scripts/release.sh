@@ -116,7 +116,7 @@ fi
 printf '\nUploading %s files to a draft of the release %s of %s\n' "$total" "$tag" "$repo"
 gh release create "$tag" --repo "$repo" --verify-tag --draft \
     --title "LLVM $version, anti build $build_number" \
-    --notes "The eight LLVM tools and clang of LLVM $version for six hosts, built from the recipe at $commit. SHA256SUMS.sig is an ECDSA P-256 signature over the SHA-256 digest of SHA256SUMS, by the key of release@anti-lang.com in $public, whose SHA-256 fingerprint is $fingerprint." \
+    --notes "The nine LLVM tools and clang of LLVM $version for six hosts, built from the recipe at $commit. SHA256SUMS.sig is an ECDSA P-256 signature over the SHA-256 digest of SHA256SUMS, by the key of release@anti-lang.com in $public, whose SHA-256 fingerprint is $fingerprint." \
     >/dev/null
 for file in $assets; do
     row "$(basename "$file")" "$file"

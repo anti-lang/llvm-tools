@@ -1,4 +1,4 @@
-# Build the eight LLVM tools and clang of one host from the pinned LLVM
+# Build the nine LLVM tools and clang of one host from the pinned LLVM
 # source, or the compiler-rt builtins of all six targets.
 #
 #   cmake -DHOST=<host> [-DRUNNER=<command>] [-DACCEPT_LICENSE=yes] \
@@ -9,13 +9,14 @@
 # release that pins/release.toml names for this machine. The recipe checks
 # the digest and the Sigstore attestation of that archive and the digest of
 # the source. It builds lld, llvm-mc, opt, llc, llvm-ar, llvm-objdump,
-# llvm-readobj, llvm-profdata and clang into build/<host>/llvm/bin, with the
-# built-in headers of clang beside them. It refuses a binary that names a
+# llvm-readobj, llvm-profdata, llvm-cov and clang into build/<host>/llvm/bin,
+# with the built-in headers of clang beside them. It refuses a binary that names a
 # shared library outside the system set of its host, and one that reports
 # another version. opt and llc of a host that runs on this machine compile
 # checks/hello.ll for the six triples, and opt applies the profile that its
-# llvm-profdata merges from checks/hello.proftext. It then writes
-# build/<host>/recipe, which scripts/pack.sh reads.
+# llvm-profdata merges from checks/hello.proftext. Its llvm-cov reports the
+# coverage of a run of checks/hello.c, which the release clang compiles. It
+# then writes build/<host>/recipe, which scripts/pack.sh reads.
 #
 # STEP=builtins builds the compiler-rt builtins of the six targets, the
 # sanitizer runtimes, the libunwind of Linux on glibc and the profile
@@ -38,6 +39,9 @@
 #   check-codegen           compile checks/hello.ll with opt and llc in BIN
 #                           for the six triples, and with the profile that
 #                           llvm-profdata in BIN merges, into OUT
+#   check-coverage          compile checks/hello.c with the release clang,
+#                           run it, and report its coverage with
+#                           llvm-profdata and llvm-cov in BIN, into OUT
 #   check-link-version      check the ld64 version that clang in BIN records
 #   check-builtins          check the compiler-rt runtimes in BUILTINS, the
 #                           lib directory of a resource directory
@@ -603,6 +607,76 @@ function(check_codegen bin dir)
                    "merges to hello.ll, and the module verifies")
 endfunction()
 
+# The lines that llvm-cov report counts in the two functions of
+# checks/hello.c, and the two of the branch that its run never reaches.
+set(coverage_lines 14)
+set(coverage_missed_lines 2)
+
+# Refuse llvm-cov in bin unless it reports the coverage of a run of
+# checks/hello.c. The release clang compiles the program with
+# -fprofile-instr-generate -fcoverage-mapping, and the program runs.
+# llvm-profdata in bin merges the profile of that run, and llvm-cov report
+# in bin must count the lines of hello.c. The program, both profiles and the
+# report go into dir.
+#
+# DESIGN: llvm-cov drops a profile whose hash does not match a function
+# with a warning and status 0, and counts no line of it as reached. The
+# check reads both counts of hello.c, so a profile that llvm-cov ignores is
+# refused.
+#
+# DESIGN: the program is one of this machine, whatever the host. The
+# release carries the profile runtime of its own processor alone, and
+# llvm-cov reads the program of any processor. As in the codegen check, the
+# tools are those of a host that runs on this machine.
+function(check_coverage bin dir)
+    runs_here(here prefix)
+    if(NOT here)
+        message(FATAL_ERROR "the tools of ${HOST} do not run on ${machine}, and "
+                            "the coverage check runs them here")
+    endif()
+    if(NOT os STREQUAL "macos")
+        message(FATAL_ERROR "the coverage check compiles hello.c against the "
+                            "macOS SDK, and ${HOST} has none")
+    endif()
+    foreach(tool llvm-profdata llvm-cov)
+        if(NOT EXISTS "${bin}/${tool}${exe}")
+            message(FATAL_ERROR "${tool}${exe} is missing in ${bin}")
+        endif()
+    endforeach()
+    file(REMOVE_RECURSE "${dir}")
+    file(MAKE_DIRECTORY "${dir}")
+    set(program "${dir}/hello")
+    set(raw "${dir}/hello.profraw")
+    set(profile "${dir}/hello.profdata")
+    run_or_stop("clang -fcoverage-mapping" "${release_bin}/clang${machine_exe}"
+                -isysroot "${sysroot}" -fuse-ld=lld -fprofile-instr-generate
+                -fcoverage-mapping -o "${program}" "${root}/checks/hello.c")
+    run_or_stop("the run of hello.c" "${CMAKE_COMMAND}" -E env
+                "LLVM_PROFILE_FILE=${raw}" "${program}")
+    run_or_stop("llvm-profdata merge" ${prefix} "${bin}/llvm-profdata${exe}" merge
+                -o "${profile}" "${raw}")
+    run_or_stop("llvm-cov report" ${prefix} "${bin}/llvm-cov${exe}" report
+                "${program}" "-instr-profile=${profile}")
+    file(WRITE "${dir}/report.txt" "${out}")
+    # The row of a file holds three pairs of a count and its missed part,
+    # each with a percentage: regions, functions, lines.
+    set(pair " +([0-9]+) +([0-9]+) +[0-9.]+%")
+    if(NOT out MATCHES "hello\\.c${pair}${pair}${pair}")
+        message(FATAL_ERROR "llvm-cov report names no hello.c on ${HOST}: "
+                            "${out}${err}")
+    endif()
+    set(lines "${CMAKE_MATCH_5}")
+    set(missed "${CMAKE_MATCH_6}")
+    if(NOT lines EQUAL coverage_lines OR NOT missed EQUAL coverage_missed_lines)
+        message(FATAL_ERROR "llvm-cov report counts ${lines} lines of hello.c "
+                            "and ${missed} missed on ${HOST}, and the run of "
+                            "hello.c gives ${coverage_lines} and "
+                            "${coverage_missed_lines}: ${err}")
+    endif()
+    message(STATUS "llvm-cov report counts ${lines} lines of hello.c, ${missed} "
+                   "of them missed, from the profile that llvm-profdata merges")
+endfunction()
+
 # Refuse a clang in bin that records another ld64 version than
 # darwin_link_version, or none. clang -### shows the version it records as
 # -target-linker-version of its cc1 line.
@@ -646,6 +720,12 @@ elseif(STEP STREQUAL "check-codegen")
         set(OUT "${work}/codegen")
     endif()
     check_codegen("${BIN}" "${OUT}")
+    return()
+elseif(STEP STREQUAL "check-coverage")
+    if(NOT DEFINED OUT)
+        set(OUT "${work}/coverage")
+    endif()
+    check_coverage("${BIN}" "${OUT}")
     return()
 elseif(NOT STEP MATCHES "^(all|builtins|check-builtins|check-unwind|check-profile|glibc-sysroot)$")
     message(FATAL_ERROR "STEP is '${STEP}', which the recipe does not know")
@@ -1712,7 +1792,7 @@ cmake_build("${work}/llvm" "${source}/llvm" OPTIONS
     -DLLVM_INCLUDE_DOCS=OFF
     ${host_flags}
     ${llvm_flags}
-    # Step 4. The eight tools, clang and its built-in headers, and nothing
+    # Step 4. The nine tools, clang and its built-in headers, and nothing
     # else.
     TARGETS ${BINARIES} clang-resource-headers)
 
@@ -1737,9 +1817,11 @@ endif()
 runs_here(here prefix)
 if(here)
     check_codegen("${tools_bin}" "${work}/codegen")
+    check_coverage("${tools_bin}" "${work}/coverage")
 else()
-    message(STATUS "the codegen check runs the tools of a host that runs on "
-                   "${machine}, and those of ${HOST} run on another machine")
+    message(STATUS "the codegen and coverage checks run the tools of a host "
+                   "that runs on ${machine}, and those of ${HOST} run on "
+                   "another machine")
 endif()
 write_stamp("${stamp}")
 message(STATUS "${tools_bin} holds the tools and clang of LLVM ${version} for ${HOST}")

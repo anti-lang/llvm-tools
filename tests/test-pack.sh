@@ -59,7 +59,7 @@ fake_build linux-x86_64 yes "$commit"
 archive="$dist/llvm-tools-$tag-linux-x86_64.tar.xz"
 [ -f "$archive" ] || fail "$archive was not written"
 listing=$(tar -tJf "$archive" | sort | tr '\n' ' ')
-expected="VERSION bin/ bin/llc bin/lld bin/llvm-ar bin/llvm-mc bin/llvm-objdump bin/llvm-profdata bin/llvm-readobj bin/opt licenses/ licenses/llvm.txt licenses/musl.txt "
+expected="VERSION bin/ bin/llc bin/lld bin/llvm-ar bin/llvm-cov bin/llvm-mc bin/llvm-objdump bin/llvm-profdata bin/llvm-readobj bin/opt licenses/ licenses/llvm.txt licenses/musl.txt "
 [ "$listing" = "$expected" ] || fail "the archive holds: $listing"
 tar -xJf "$archive" -C "$work" VERSION bin/lld licenses/llvm.txt
 printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" "$commit" \
@@ -95,7 +95,7 @@ fake_build windows-arm64 yes "$commit"
 "$copy/scripts/pack.sh" windows-arm64 >/dev/null
 listing=$(tar -tJf "$dist/llvm-tools-$tag-windows-arm64.tar.xz" |
     sort | tr '\n' ' ')
-expected="VERSION bin/ bin/llc.exe bin/lld.exe bin/llvm-ar.exe bin/llvm-mc.exe bin/llvm-objdump.exe bin/llvm-profdata.exe bin/llvm-readobj.exe bin/opt.exe licenses/ licenses/llvm.txt "
+expected="VERSION bin/ bin/llc.exe bin/lld.exe bin/llvm-ar.exe bin/llvm-cov.exe bin/llvm-mc.exe bin/llvm-objdump.exe bin/llvm-profdata.exe bin/llvm-readobj.exe bin/opt.exe licenses/ licenses/llvm.txt "
 [ "$listing" = "$expected" ] || fail "the Windows archive holds: $listing"
 entries=$(tar -tJf "$dist/clang-$tag-windows-arm64.tar.xz" | sort)
 printf '%s\n' "$entries" | grep -qx bin/clang.exe ||

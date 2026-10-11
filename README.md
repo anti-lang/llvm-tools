@@ -2,8 +2,9 @@
 
 The eight LLVM tools that Anti ships, `llvm-mc`, `lld`, `opt`, `llc`, `llvm-ar`,
 `llvm-objdump`, `llvm-readobj` and `llvm-profdata`, and the clang that builds Anti, for
-every host from the pinned LLVM source. The compiler that builds them is clang of the
-pinned LLVM release. Each host gets two archives, published as assets of a GitHub
+every host from the pinned LLVM source. A ninth tool, `llvm-cov`, measures the coverage
+of Anti's own tests, and Anti does not ship it. The compiler that builds them is clang of
+the pinned LLVM release. Each host gets two archives, published as assets of a GitHub
 release: the tools, and clang with its built-in headers, the compiler-rt builtins of all
 six targets, the sanitizer runtimes and the profile runtimes. `antic` downloads the
 archives of its host and nothing else from LLVM.
@@ -19,7 +20,7 @@ Each release holds these files.
 
 | File | Contents |
 |---|---|
-| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the eight tools, `licenses/`, `VERSION` |
+| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the nine tools, `licenses/`, `VERSION` |
 | `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers, the builtins, the sanitizer runtimes, `libunwind.a` and the profile runtimes, `licenses/`, `VERSION` |
 | `SHA256SUMS` | The SHA-256 digest of each archive |
 | `SHA256SUMS.sig` | An ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS` |
@@ -57,6 +58,12 @@ counters at exit, and `llvm-profdata merge` turns the `.profraw` files into the
 target are: musl against the musl sysroot, glibc against glibc 2.35, Windows through the
 CRT and SDK of xwin, and macOS against the SDK.
 
+`llvm-cov` reads the coverage of a program that clang compiles with
+`-fprofile-instr-generate -fcoverage-mapping`. The program writes a `.profraw` file at
+exit, `llvm-profdata merge` turns it into a `.profdata` file, and `llvm-cov report` and
+`llvm-cov show` count the lines that the run reached. Antic measures its own tests that
+way. The Anti package holds the other eight tools and no `llvm-cov`.
+
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
 `windows-x86_64` and `windows-arm64`. The Linux binaries link musl, libc++ and zlib
 statically and name no shared library. Each asks for a thread stack of 8 MiB in its
@@ -68,6 +75,8 @@ binaries link the CRT statically and import system DLLs alone.
 
 ## Changes
 
+- `23.1.1-anti.8`: the tools archives carry `llvm-cov`, which reports the coverage of a
+  program from the profile that `llvm-profdata` merges.
 - `23.1.1-anti.7`: every Linux binary asks for a thread stack of 8 MiB, so ThinLTO in
   `ld.lld` no longer overflows the small default stack of musl.
 - `23.1.1-anti.6`: the tools archives carry `llvm-profdata`, and the clang archives the
@@ -109,6 +118,7 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | `build-llvm.cmake` | The recipe, which builds one host |
 | `checks/hello.ll` | The module that `opt` and `llc` compile for the six triples |
 | `checks/hello.proftext` | The profile of `hello.ll` that `llvm-profdata` merges and `opt` applies |
+| `checks/hello.c` | The program whose coverage `llvm-cov` reports |
 | `hosts.toml` | Per host: triple, build machine, sysroot kind, CMake options |
 | `pins/llvm-version` | The LLVM version |
 | `pins/source.sha256` | The SHA-256 digest of the LLVM source archive |
@@ -143,7 +153,10 @@ machine needs `qemu-x86_64` through binfmt when its processor is arm64.
 `REMOTE_SSH_OPTIONS` passes options to ssh and scp. `opt` and `llc` of a host that runs
 on the build machine also compile `checks/hello.ll` for the six triples, and its
 `llvm-readobj` checks the format of each object. Its `llvm-profdata` merges
-`checks/hello.proftext`, and its `opt` must apply that profile to `hello.ll`.
+`checks/hello.proftext`, and its `opt` must apply that profile to `hello.ll`. The release
+clang compiles `checks/hello.c` with `-fprofile-instr-generate -fcoverage-mapping`, and
+the program runs. `llvm-profdata` of the host merges its profile, and `llvm-cov report`
+of the host must count the 14 lines of `hello.c`, 2 of them missed.
 
 Commit the recipe first, because `scripts/pack.sh` refuses a build of uncommitted files.
 Then build and publish:
