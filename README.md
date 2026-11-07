@@ -125,7 +125,7 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | Path | Contents |
 |---|---|
 | `c` | Builds the builtins and every host |
-| `r` | Packs every host and publishes the release |
+| `r` | Packs every host, or the hosts it names, and publishes the release |
 | `build-llvm.cmake` | The recipe, which builds one host |
 | `checks/hello.ll` | The module that `opt` and `llc` compile for the six triples |
 | `checks/hello.proftext` | The profile of `hello.ll` that `llvm-profdata` merges and `opt` applies |
@@ -183,18 +183,25 @@ Then build and publish:
 ./r
 ```
 
+`./r macos-arm64 macos-x86_64` packs and publishes the hosts it names alone. Each must
+be a host of `hosts.toml` and stand once. `23.1.1-anti.9` holds the two macOS hosts
+alone, by Eddie's decision of 2026-11-07, and Linux and Windows follow as a release of
+their own.
+
 `./c` builds the builtins, then each host of `hosts.toml` with `scripts/build.sh`, and
 stops at the first failure. It accepts the licence terms of the Microsoft CRT and Windows
 SDK, which xwin downloads.
 
-`./r` packs each host with `scripts/pack.sh`, then runs `scripts/release.sh`. A host
+`./r` packs each host with `scripts/pack.sh`, then runs `scripts/release.sh` with the
+same hosts. A host
 whose two archives come from its build is not packed again, so `./r` can run again after
 a failure. `scripts/release.sh` writes `SHA256SUMS`, signs it with
 `keys/private/release-key.enc.pem` and checks the signature against
 `keys/public/release.pem`. openssl asks for the passphrase of the key. The script then
 tags the recipe commit and uploads each file, with a line each, to a draft that it
 publishes after the last one. It downloads each file again and prints `same` or
-`DIFFERS` for each. It needs `gh` logged in to an account that can write releases of
+`DIFFERS` for each. `SHA256SUMS`, the check that every archive names one recipe commit,
+the title and the notes cover the hosts of the release alone. It needs `gh` logged in to an account that can write releases of
 `anti-lang/llvm-tools`.
 
 ## Tests

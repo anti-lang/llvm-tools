@@ -12,11 +12,16 @@ As of 2026-11-07.
 - `23.1.1-anti.8` is published, on 2026-10-11. Its tag names `b0ef666`, and antic pins
   it. It adds `llvm-cov` to the tools archives. The report is
   `docs/reports/2026-10-11-llvm-tools-cov.md`.
-- `23.1.1-anti.9` is neither built in full nor published. Its recipe adds `llvm-objcopy`,
-  `llvm-strip` and `dsymutil` to the tools archives, for antic's T211, and
-  `pins/build-number` is 9. Eddie decides the release.
-- `origin/main` stands at `b0ef666`. The recipe commits of anti.9 are local and not
-  pushed. `./r` pushes the tag alone, so push `main` after each release as well.
+- `23.1.1-anti.9` is packed and not published. Its recipe adds `llvm-objcopy`,
+  `llvm-strip` and `dsymutil` to the tools archives, for antic's T211. By Eddie's
+  decision of 2026-11-07 it holds the two macOS hosts alone, four archives built from
+  `6c15f30`. Eddie publishes it with `./r macos-arm64 macos-x86_64`. The report is
+  `docs/reports/2026-11-07-llvm-tools-macos-anti9.md`.
+- `23.1.1-anti.10` is the release of the four Linux and Windows hosts with the recipe of
+  anti.9. It needs the test VMs, whose trees still stand at `b0ef666`, and
+  `pins/build-number` moves to 10 before its build.
+- `origin/main` stands at `b0ef666`. The commits of anti.9 are local and not pushed.
+  `./r` pushes the tag alone, so push `main` after each release as well.
 - `build/dist-26b62fa` holds the archives of the first anti.4 build, unpublished.
 
 ## Open items
