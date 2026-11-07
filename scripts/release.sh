@@ -1,8 +1,9 @@
 #!/bin/sh
-# Publish the twelve archives of pins/build-number as a GitHub release, the
-# tools and clang of each of the six hosts.
+# Publish the archives of pins/build-number as a GitHub release, the tools
+# and clang of each of the six hosts, or of the hosts named on the command
+# line.
 #
-#   scripts/release.sh
+#   scripts/release.sh [<host>...]
 #
 # Tags the recipe commit that the archives name as <version>-anti.<build>
 # and pushes the tag to origin. Writes SHA256SUMS and signs it into
@@ -13,7 +14,14 @@
 # of the origin remote does. scripts/common.sh names both halves of the key.
 . "$(dirname "$0")/common.sh"
 
-[ "$#" -eq 0 ] || die "usage: scripts/release.sh"
+# DESIGN: a release may cover some of the hosts of hosts.toml. Eddie
+# decided on 2026-11-07 to release 23.1.1-anti.9 for the two macOS hosts
+# first, while the test VMs that check the Linux and Windows builds are
+# away, and to release those hosts later under a build number of their
+# own. SHA256SUMS, its signature, the check of the recipe commit, the
+# title and the notes then cover the named hosts alone. Without a host
+# the release covers all six.
+hosts=$(release_hosts "$@")
 dist=$(recipe_path linux-x86_64 dist)
 repo=${GH_REPO:-$(git -C "$root" remote get-url origin |
     sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')}
@@ -29,7 +37,7 @@ fi
 commit=""
 files=""
 for kind in $archive_kinds; do
-    for host in $(toml_sections "$root/hosts.toml"); do
+    for host in $hosts; do
         archive="$dist/$(archive_name "$kind" "$host")"
         [ -f "$archive" ] || die "$archive is missing. Run scripts/pack.sh $host."
         named=$(tar -xOJf "$archive" VERSION | sed -n 's/^recipe //p')
@@ -62,6 +70,24 @@ row() {
     printf "  %-${width}s  " "$1"
     [ "$#" -lt 2 ] || printf '%10s  ' "$(size "$2")"
 }
+
+# Print the arguments as a list in prose, as in "a, b and c".
+prose_list() {
+    printf '%s\n' "$@" | awk '{ word[NR] = $0 }
+        END {
+            for (i = 1; i < NR - 1; i++) printf "%s, ", word[i]
+            if (NR > 1) printf "%s and ", word[NR - 1]
+            print word[NR]
+        }'
+}
+
+# The notes name the hosts, and the title names them when the release
+# covers some of the hosts of hosts.toml.
+names=$(prose_list $hosts)
+title="LLVM $version, anti build $build_number"
+[ "$(printf '%s\n' "$hosts" | wc -l)" -eq "$(toml_sections "$root/hosts.toml" | wc -l)" ] ||
+    title="$title for $names"
+tools=$(toml_get "$root/hosts.toml" "" tools | wc -l | tr -d ' ')
 
 # The manifest lists the archives, sorted by name, in the format that
 # shasum -c and sha256sum -c read.
@@ -115,8 +141,8 @@ fi
 # upload without --clobber never replaces a file.
 printf '\nUploading %s files to a draft of the release %s of %s\n' "$total" "$tag" "$repo"
 gh release create "$tag" --repo "$repo" --verify-tag --draft \
-    --title "LLVM $version, anti build $build_number" \
-    --notes "The nine LLVM tools and clang of LLVM $version for six hosts, built from the recipe at $commit. SHA256SUMS.sig is an ECDSA P-256 signature over the SHA-256 digest of SHA256SUMS, by the key of release@anti-lang.com in $public, whose SHA-256 fingerprint is $fingerprint." \
+    --title "$title" \
+    --notes "The $tools LLVM tools and clang of LLVM $version for $names, built from the recipe at $commit. SHA256SUMS.sig is an ECDSA P-256 signature over the SHA-256 digest of SHA256SUMS, by the key of release@anti-lang.com in $public, whose SHA-256 fingerprint is $fingerprint." \
     >/dev/null
 for file in $assets; do
     row "$(basename "$file")" "$file"

@@ -2,7 +2,8 @@
 # ./c builds the builtins and every host of hosts.toml, with the machines of
 # the version checks and the Microsoft licence terms accepted. ./r packs
 # each host that is not packed from its build yet, then runs
-# scripts/release.sh. Stand-ins for the scripts record each call.
+# scripts/release.sh. Hosts named on the command line limit both to those
+# hosts. Stand-ins for the scripts record each call.
 . "$(dirname "$0")/lib.sh"
 
 copy=$(checkout_copy)
@@ -22,7 +23,6 @@ STUB
 done
 
 expect_refusal usage "$copy/c" macos-arm64
-expect_refusal usage "$copy/r" now
 
 # ./c builds the builtins first, then each host in the order of hosts.toml.
 : > "$calls"
@@ -78,6 +78,23 @@ done
 expected="$expected
 release"
 [ "$(cat "$calls")" = "$expected" ] || fail "./r called: $(cat "$calls")"
+
+# ./r with hosts named packs and releases those alone, by the decision of
+# 2026-11-07 to release the macOS hosts first. macos-arm64 is packed from
+# its build already.
+: > "$calls"
+"$copy/r" macos-arm64 macos-x86_64 >/dev/null || fail "./r failed: $(cat "$calls")"
+expected="pack macos-x86_64
+release macos-arm64 macos-x86_64"
+[ "$(cat "$calls")" = "$expected" ] || fail "./r called: $(cat "$calls")"
+
+# A host that hosts.toml lacks, or one named twice, stops ./r before it
+# packs anything.
+: > "$calls"
+expect_refusal "now is not a host of hosts.toml" "$copy/r" macos-arm64 now
+expect_refusal "macos-x86_64 is named twice" \
+    "$copy/r" macos-x86_64 macos-arm64 macos-x86_64
+[ ! -s "$calls" ] || fail "./r went on after a refused host: $(cat "$calls")"
 
 # A host that fails to pack stops ./r before the release.
 : > "$calls"

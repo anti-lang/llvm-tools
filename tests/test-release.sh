@@ -1,7 +1,8 @@
 #!/bin/sh
 # scripts/release.sh tags the recipe commit, signs SHA256SUMS with the
 # private release key and uploads the twelve archives, the tools and clang
-# of six hosts. It never replaces a published one. gh is a stand-in, origin
+# of six hosts, or those of the hosts named on the command line. It never
+# replaces a published one. gh is a stand-in, origin
 # is a bare repository on disk, and a key made here stands in for the
 # release key.
 . "$(dirname "$0")/lib.sh"
@@ -26,15 +27,19 @@ private=$(common_value "$copy" private_key)
 openssl pkey -in "$work/test-key.pem" -pubout -out "$public"
 mkdir -p "$(dirname "$private")"
 
-# Write the twelve archives, each with a VERSION that names commit $1.
+# Write the archives of the hosts after $1, or the twelve of the six hosts
+# without them, each with a VERSION that names commit $1.
 fake_archives() {
+    named=$1
+    shift
+    [ "$#" -gt 0 ] || set -- linux-x86_64 linux-arm64 macos-arm64 macos-x86_64 \
+        windows-x86_64 windows-arm64
     rm -rf "$dist"
     mkdir -p "$dist" "$work/stage"
-    printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" "$1" \
+    printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" "$named" \
         > "$work/stage/VERSION"
     for kind in llvm-tools clang; do
-        for host in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64 \
-                    windows-x86_64 windows-arm64; do
+        for host in "$@"; do
             tar -cJf "$dist/$kind-$tag-$host.tar.xz" -C "$work/stage" VERSION
         done
     done
@@ -71,6 +76,8 @@ case "\$1 \$2" in
 esac
 EOF
 chmod +x "$work/fake"/*
+tools=$(cd "$copy" && sh -c '. scripts/common.sh && toml_get hosts.toml "" tools' |
+    wc -l | tr -d ' ')
 release() {
     PATH="$work/fake:$PATH" GH_REPO=anti-lang/llvm-tools \
         "$copy/scripts/release.sh" "$@"
@@ -139,6 +146,9 @@ printf '%s\n' "$output" | grep -q "All 14 files on GitHub match" ||
 if grep -q -e --clobber "$work/gh.log"; then
     fail "release.sh replaced an asset: $(cat "$work/gh.log")"
 fi
+# The title names the build, and the notes name the tools and the six hosts.
+grep -qF -- "--title LLVM $version, anti build $build --notes The $tools LLVM tools and clang of LLVM $version for linux-x86_64, linux-arm64, macos-arm64, macos-x86_64, windows-x86_64 and windows-arm64, built from the recipe at $commit." \
+    "$work/gh.log" || fail "the title or the notes are wrong: $(cat "$work/gh.log")"
 
 # A download that differs from its file fails the run, after every file is
 # compared.
@@ -157,6 +167,52 @@ expect_refusal "already" env FAKE_RELEASE=published PATH="$work/fake:$PATH" \
 if grep -q '^release create' "$work/gh.log"; then
     fail "release.sh created a release over a published one"
 fi
+
+# A release of the hosts named on the command line covers those alone, by
+# the decision of 2026-11-07 to release the macOS hosts first. An archive
+# of another host, from another commit, plays no part.
+fake_archives "$commit" macos-arm64 macos-x86_64
+printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" 0000000 \
+    > "$work/stage/VERSION"
+tar -cJf "$dist/llvm-tools-$tag-linux-arm64.tar.xz" -C "$work/stage" VERSION
+: > "$work/gh.log"
+output=$(release macos-arm64 macos-x86_64 2>&1) || fail "the release failed: $output"
+expected="clang-$tag-macos-arm64.tar.xz
+clang-$tag-macos-x86_64.tar.xz
+llvm-tools-$tag-macos-arm64.tar.xz
+llvm-tools-$tag-macos-x86_64.tar.xz"
+[ "$(awk '{ print $2 }' "$sums")" = "$expected" ] || fail "SHA256SUMS: $(cat "$sums")"
+(cd "$dist" && shasum -a 256 -c SHA256SUMS >/dev/null) ||
+    fail "SHA256SUMS does not match the archives"
+openssl dgst -sha256 -binary -out "$work/check.sha256" "$sums"
+openssl pkeyutl -verify -pubin -inkey "$public" \
+    -in "$work/check.sha256" -sigfile "$dist/SHA256SUMS.sig" >/dev/null ||
+    fail "SHA256SUMS.sig does not verify against $public"
+[ "$(grep -c '^release upload' "$work/gh.log")" = 6 ] ||
+    fail "gh did not upload 6 files: $(cat "$work/gh.log")"
+if grep -q "^release upload .*linux-arm64" "$work/gh.log"; then
+    fail "gh uploaded an archive of a host that was not named: $(cat "$work/gh.log")"
+fi
+printf '%s\n' "$output" | grep -q "All 6 files on GitHub match" ||
+    fail "the output does not end in the comparison of 6 files: $output"
+grep -qF -- "--title LLVM $version, anti build $build for macos-arm64 and macos-x86_64 --notes The $tools LLVM tools and clang of LLVM $version for macos-arm64 and macos-x86_64, built from the recipe at $commit." \
+    "$work/gh.log" || fail "the title or the notes are wrong: $(cat "$work/gh.log")"
+
+# A named host whose archive is missing, or names another commit, is
+# refused. So are a host that hosts.toml lacks and a host named twice,
+# before gh is asked anything.
+fake_archives "$commit" macos-arm64 macos-x86_64
+rm "$dist/clang-$tag-macos-x86_64.tar.xz"
+expect_refusal "clang-$tag-macos-x86_64" release macos-arm64 macos-x86_64
+fake_archives "$commit" macos-arm64 macos-x86_64
+printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" 0000000 \
+    > "$work/stage/VERSION"
+tar -cJf "$dist/clang-$tag-macos-x86_64.tar.xz" -C "$work/stage" VERSION
+expect_refusal "commit" release macos-arm64 macos-x86_64
+: > "$work/gh.log"
+expect_refusal "now is not a host of hosts.toml" release macos-arm64 now
+expect_refusal "macos-arm64 is named twice" release macos-arm64 macos-arm64
+[ ! -s "$work/gh.log" ] || fail "gh ran for a refused host: $(cat "$work/gh.log")"
 
 # A tag on origin that names another commit is refused, after the
 # signature.

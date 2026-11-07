@@ -73,3 +73,19 @@ require_host() {
     toml_sections "$root/hosts.toml" | grep -qx -- "$1" ||
         die "$1 is not a host of hosts.toml"
 }
+
+# Print the hosts that a release covers, one a line: the hosts in the
+# arguments, or every host of hosts.toml without any. Each must be a host
+# of hosts.toml, and none may stand twice.
+release_hosts() {
+    if [ "$#" -eq 0 ]; then
+        toml_sections "$root/hosts.toml"
+        return
+    fi
+    for host in "$@"; do
+        require_host "$host"
+    done
+    twice=$(printf '%s\n' "$@" | sort | uniq -d | head -n 1)
+    [ -z "$twice" ] || die "$twice is named twice"
+    printf '%s\n' "$@"
+}
