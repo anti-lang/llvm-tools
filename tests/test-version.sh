@@ -22,10 +22,11 @@ llc_reporting() {
     chmod +x "$dir/llc"
 }
 
-# Write the nine tools into directory $1 as scripts that report version $2.
+# Write the twelve tools into directory $1 as scripts that report version $2.
 tools_reporting() {
     mkdir -p "$1"
-    for tool in llvm-mc opt llvm-ar llvm-objdump llvm-readobj llvm-profdata llvm-cov; do
+    for tool in llvm-mc opt llvm-ar llvm-objdump llvm-readobj llvm-profdata llvm-cov \
+                llvm-objcopy llvm-strip dsymutil; do
         printf '#!/bin/sh\necho "LLVM version %s"\n' "$2" > "$1/$tool"
     done
     llc_reporting "$1" "$2" aarch64 aarch64_32 arm64 x86 x86-64
@@ -64,6 +65,14 @@ tools_reporting "$work/old-cov" "$version"
 printf '#!/bin/sh\necho "LLVM version 22.1.3"\n' > "$work/old-cov/llvm-cov"
 expect_refusal "llvm-cov reports 22.1.3" recipe "$root" -DHOST=macos-arm64 \
     -DSTEP=check-version -DBIN="$work/old-cov"
+
+# tools_reporting sets tool, so the loop names its tool stale.
+for stale in llvm-objcopy llvm-strip dsymutil; do
+    tools_reporting "$work/old-$stale" "$version"
+    printf '#!/bin/sh\necho "LLVM version 22.1.3"\n' > "$work/old-$stale/$stale"
+    expect_refusal "$stale reports 22.1.3" recipe "$root" -DHOST=macos-arm64 \
+        -DSTEP=check-version -DBIN="$work/old-$stale"
+done
 
 # An llc without the back end of either target that antic compiles for is
 # refused.

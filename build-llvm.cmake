@@ -1,4 +1,4 @@
-# Build the nine LLVM tools and clang of one host from the pinned LLVM
+# Build the twelve LLVM tools and clang of one host from the pinned LLVM
 # source, or the compiler-rt builtins of all six targets.
 #
 #   cmake -DHOST=<host> [-DRUNNER=<command>] [-DACCEPT_LICENSE=yes] \
@@ -9,8 +9,9 @@
 # release that pins/release.toml names for this machine. The recipe checks
 # the digest and the Sigstore attestation of that archive and the digest of
 # the source. It builds lld, llvm-mc, opt, llc, llvm-ar, llvm-objdump,
-# llvm-readobj, llvm-profdata, llvm-cov and clang into build/<host>/llvm/bin,
-# with the built-in headers of clang beside them. It refuses a binary that names a
+# llvm-readobj, llvm-profdata, llvm-cov, llvm-objcopy, llvm-strip, dsymutil
+# and clang into build/<host>/llvm/bin, with the built-in headers of clang
+# beside them. It refuses a binary that names a
 # shared library outside the system set of its host, and one that reports
 # another version. opt and llc of a host that runs on this machine compile
 # checks/hello.ll for the six triples, and opt applies the profile that its
@@ -319,6 +320,12 @@ endif()
 # clang of 23.1.1 import. clang reads the version of Visual Studio with
 # version.dll.
 set(macos_libraries /usr/lib/libSystem.B.dylib /usr/lib/libc++.1.dylib)
+# DESIGN: dsymutil alone may also name CoreFoundation. LLVM 23.1.1 links it
+# into dsymutil on APPLE, for the Info.plist of a dSYM, with no option to
+# drop it. CoreFoundation is part of every macOS, so the rule above still
+# holds. Any other tool that names it is refused.
+set(macos_dsymutil_libraries
+    /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation)
 set(windows_libraries advapi32.dll crypt32.dll kernel32.dll ntdll.dll
     oleaut32.dll version.dll winhttp.dll)
 set(linux_formats_x86_64 elf64-x86-64)
@@ -388,10 +395,14 @@ function(check_libraries bin)
                 execute_process(COMMAND "${objdump}" --macho --private-headers
                                         "${file}" OUTPUT_VARIABLE commands)
             endif()
+            set(allowed ${macos_libraries})
+            if(tool STREQUAL "dsymutil")
+                list(APPEND allowed ${macos_dsymutil_libraries})
+            endif()
             string(REGEX MATCHALL "\n\t[^ \n]+" lines "${libraries}")
             foreach(line IN LISTS lines)
                 string(STRIP "${line}" line)
-                if(NOT line IN_LIST macos_libraries)
+                if(NOT line IN_LIST allowed)
                     list(APPEND needed "${line}")
                 endif()
             endforeach()
@@ -1792,8 +1803,8 @@ cmake_build("${work}/llvm" "${source}/llvm" OPTIONS
     -DLLVM_INCLUDE_DOCS=OFF
     ${host_flags}
     ${llvm_flags}
-    # Step 4. The nine tools, clang and its built-in headers, and nothing
-    # else.
+    # Step 4. The twelve tools, clang and its built-in headers, and
+    # nothing else. llvm-strip is the target that links it to llvm-objcopy.
     TARGETS ${BINARIES} clang-resource-headers)
 
 # Steps 5 and 6.

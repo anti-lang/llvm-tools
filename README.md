@@ -3,7 +3,9 @@
 The eight LLVM tools that Anti ships, `llvm-mc`, `lld`, `opt`, `llc`, `llvm-ar`,
 `llvm-objdump`, `llvm-readobj` and `llvm-profdata`, and the clang that builds Anti, for
 every host from the pinned LLVM source. A ninth tool, `llvm-cov`, measures the coverage
-of Anti's own tests, and Anti does not ship it. The compiler that builds them is clang of
+of Anti's own tests, and Anti does not ship it. `llvm-objcopy` and `llvm-strip`
+strip the debug information of a program that was linked once with `-g`, and `dsymutil`
+writes the dSYM of a macOS program from it. The compiler that builds them is clang of
 the pinned LLVM release. Each host gets two archives, published as assets of a GitHub
 release: the tools, and clang with its built-in headers, the compiler-rt builtins of all
 six targets, the sanitizer runtimes and the profile runtimes. `antic` downloads the
@@ -20,7 +22,7 @@ Each release holds these files.
 
 | File | Contents |
 |---|---|
-| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the nine tools, `licenses/`, `VERSION` |
+| `llvm-tools-<version>-anti.<build>-<host>.tar.xz` | `bin/` with the twelve tools, `licenses/`, `VERSION` |
 | `clang-<version>-anti.<build>-<host>.tar.xz` | `bin/clang`, `lib/clang/23/` with the built-in headers, the builtins, the sanitizer runtimes, `libunwind.a` and the profile runtimes, `licenses/`, `VERSION` |
 | `SHA256SUMS` | The SHA-256 digest of each archive |
 | `SHA256SUMS.sig` | An ECDSA P-256 signature over the SHA-256 digest of `SHA256SUMS` |
@@ -62,19 +64,28 @@ CRT and SDK of xwin, and macOS against the SDK.
 `-fprofile-instr-generate -fcoverage-mapping`. The program writes a `.profraw` file at
 exit, `llvm-profdata merge` turns it into a `.profdata` file, and `llvm-cov report` and
 `llvm-cov show` count the lines that the run reached. Antic measures its own tests that
-way. The Anti package holds the other eight tools and no `llvm-cov`.
+way. The Anti package holds no `llvm-cov`.
+
+`llvm-strip` is `llvm-objcopy` under another name. The build of LLVM makes it a symbolic
+link, and llvm-objcopy strips when its file name names strip. The archive holds it as a
+regular file with the same bytes, so it unpacks on Windows as well.
 
 The hosts are `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
 `windows-x86_64` and `windows-arm64`. The Linux binaries link musl, libc++ and zlib
 statically and name no shared library. Each asks for a thread stack of 8 MiB in its
 `PT_GNU_STACK` header, which musl gives every thread it starts. The macOS binaries name
-`libSystem` and `libc++` of the system and record macOS 11.0 as their `minos`. Their
+`libSystem` and `libc++` of the system and record macOS 11.0 as their `minos`. `dsymutil`
+also names `CoreFoundation`, which LLVM 23.1.1 links into it on macOS with no option to
+drop it, and which every macOS holds. Their
 clang records ld64 1267 as its default linker version, the one of `23.1.1-anti.3`, which
 the recipe pins rather than read from the Xcode of the build machine. The Windows
 binaries link the CRT statically and import system DLLs alone.
 
 ## Changes
 
+- `23.1.1-anti.9`: the tools archives carry `llvm-objcopy` and `llvm-strip`, which
+  strip the debug information of a program, and `dsymutil`, which writes the dSYM of a
+  macOS program.
 - `23.1.1-anti.8`: the tools archives carry `llvm-cov`, which reports the coverage of a
   program from the profile that `llvm-profdata` merges.
 - `23.1.1-anti.7`: every Linux binary asks for a thread stack of 8 MiB, so ThinLTO in

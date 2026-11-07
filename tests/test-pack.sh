@@ -23,9 +23,13 @@ fake_build() {
     exe=$(recipe_path "$copy" "$host" exe)
     mkdir -p "$bin" "$resource/include" "$(dirname "$stamp")"
     for tool in $(recipe "$copy" -DSTEP=tools) $(recipe "$copy" -DSTEP=compiler); do
+        rm -f "$bin/$tool$exe"
         printf '%s of %s\n' "$tool" "$host" > "$bin/$tool$exe"
         chmod +x "$bin/$tool$exe"
     done
+    # The build of LLVM makes llvm-strip a link to llvm-objcopy.
+    rm "$bin/llvm-strip$exe"
+    ln -s "llvm-objcopy$exe" "$bin/llvm-strip$exe"
     printf 'typedef int size_t;\n' > "$resource/include/stddef.h"
     printf 'llvm=%s\ncommit=%s\nclean=%s\n' "$version" "$3" "$2" > "$stamp"
 }
@@ -59,7 +63,7 @@ fake_build linux-x86_64 yes "$commit"
 archive="$dist/llvm-tools-$tag-linux-x86_64.tar.xz"
 [ -f "$archive" ] || fail "$archive was not written"
 listing=$(tar -tJf "$archive" | sort | tr '\n' ' ')
-expected="VERSION bin/ bin/llc bin/lld bin/llvm-ar bin/llvm-cov bin/llvm-mc bin/llvm-objdump bin/llvm-profdata bin/llvm-readobj bin/opt licenses/ licenses/llvm.txt licenses/musl.txt "
+expected="VERSION bin/ bin/dsymutil bin/llc bin/lld bin/llvm-ar bin/llvm-cov bin/llvm-mc bin/llvm-objcopy bin/llvm-objdump bin/llvm-profdata bin/llvm-readobj bin/llvm-strip bin/opt licenses/ licenses/llvm.txt licenses/musl.txt "
 [ "$listing" = "$expected" ] || fail "the archive holds: $listing"
 tar -xJf "$archive" -C "$work" VERSION bin/lld licenses/llvm.txt
 printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" "$commit" \
@@ -67,6 +71,13 @@ printf 'llvm %s\nbuild %s\nrecipe %s\n' "$version" "$build" "$commit" \
 [ -x "$work/bin/lld" ] || fail "bin/lld is not executable in the archive"
 cmp -s "$work/licenses/llvm.txt" "$copy/licenses/llvm.txt" ||
     fail "licenses/llvm.txt differs from the committed licence"
+
+# llvm-strip is a regular file with the bytes of llvm-objcopy, not a link.
+tar -tvJf "$archive" bin/llvm-strip | grep -q '^-' ||
+    fail "bin/llvm-strip is no regular file: $(tar -tvJf "$archive" bin/llvm-strip)"
+tar -xJf "$archive" -C "$work" bin/llvm-strip bin/llvm-objcopy
+cmp -s "$work/bin/llvm-strip" "$work/bin/llvm-objcopy" ||
+    fail "bin/llvm-strip differs from bin/llvm-objcopy"
 
 # The clang archive holds clang alone in bin/, the built-in headers, the
 # builtins of the six targets, the licences and VERSION.
@@ -95,8 +106,10 @@ fake_build windows-arm64 yes "$commit"
 "$copy/scripts/pack.sh" windows-arm64 >/dev/null
 listing=$(tar -tJf "$dist/llvm-tools-$tag-windows-arm64.tar.xz" |
     sort | tr '\n' ' ')
-expected="VERSION bin/ bin/llc.exe bin/lld.exe bin/llvm-ar.exe bin/llvm-cov.exe bin/llvm-mc.exe bin/llvm-objdump.exe bin/llvm-profdata.exe bin/llvm-readobj.exe bin/opt.exe licenses/ licenses/llvm.txt "
+expected="VERSION bin/ bin/dsymutil.exe bin/llc.exe bin/lld.exe bin/llvm-ar.exe bin/llvm-cov.exe bin/llvm-mc.exe bin/llvm-objcopy.exe bin/llvm-objdump.exe bin/llvm-profdata.exe bin/llvm-readobj.exe bin/llvm-strip.exe bin/opt.exe licenses/ licenses/llvm.txt "
 [ "$listing" = "$expected" ] || fail "the Windows archive holds: $listing"
+tar -tvJf "$dist/llvm-tools-$tag-windows-arm64.tar.xz" bin/llvm-strip.exe |
+    grep -q '^-' || fail "bin/llvm-strip.exe is no regular file"
 entries=$(tar -tJf "$dist/clang-$tag-windows-arm64.tar.xz" | sort)
 printf '%s\n' "$entries" | grep -qx bin/clang.exe ||
     fail "the Windows clang archive lacks bin/clang.exe"

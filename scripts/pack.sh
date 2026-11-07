@@ -58,6 +58,14 @@ done
 stage=$(mktemp -d "${TMPDIR:-/tmp}/llvm-tools-pack.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/llvm-tools/bin" "$stage/clang/bin" "$stage/clang/lib/clang/$major"
+# DESIGN: the build of LLVM 23.1.1 makes llvm-strip a symbolic link to
+# llvm-objcopy, add_llvm_tool_symlink of llvm/tools/llvm-objcopy, on every
+# host, since LLVM_USE_SYMLINKS follows the system of this machine.
+# llvm-objcopy strips when its own file name names strip. cp follows the
+# link, so the archive holds llvm-strip as a regular file with the bytes of
+# llvm-objcopy. A link in the archive would not unpack on Windows without
+# the right to make one, and a regular file packs to the same bytes on
+# every machine.
 for tool in $(toml_get "$root/hosts.toml" "" tools); do
     [ -f "$bin/$tool$exe" ] || die "$bin/$tool$exe is missing"
     cp "$bin/$tool$exe" "$stage/llvm-tools/bin/"

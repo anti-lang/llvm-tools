@@ -3,12 +3,15 @@
 # of sysroot from pins/sysroot.toml and the CMake options of the host.
 # build-llvm.cmake and scripts/common.sh read the tables.
 
-# The nine tools that every tools archive holds. antic writes LLVM IR
+# The twelve tools that every tools archive holds. antic writes LLVM IR
 # text and runs opt and llc on it. llvm-profdata merges the profiles of a
 # program that -fprofile-generate instruments, which opt reads. llvm-cov
 # reports the coverage of antic's own tests from such a profile. antic
-# measures its tests with it and does not ship it.
-tools = ["lld", "llvm-mc", "opt", "llc", "llvm-ar", "llvm-objdump", "llvm-readobj", "llvm-profdata", "llvm-cov"]
+# measures its tests with it and does not ship it. antic links a release
+# program once with -g and ships it with the debug information stripped:
+# llvm-objcopy and llvm-strip strip it, and dsymutil writes the dSYM of a
+# macOS program.
+tools = ["lld", "llvm-mc", "opt", "llc", "llvm-ar", "llvm-objdump", "llvm-readobj", "llvm-profdata", "llvm-cov", "llvm-objcopy", "llvm-strip", "dsymutil"]
 
 # The compiler that every clang archive holds, beside its built-in headers
 # and the compiler-rt builtins of all six targets.

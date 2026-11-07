@@ -1,8 +1,8 @@
 #!/bin/sh
 # The recipe refuses a tool that names a shared library outside the system
 # set of its host. The set is empty on Linux. It holds libSystem and libc++
-# on macOS and the system DLLs on Windows. Each case links a small program
-# with the release clang.
+# on macOS, with CoreFoundation for dsymutil alone, and the system DLLs on
+# Windows. Each case links a small program with the release clang.
 . "$(dirname "$0")/lib.sh"
 
 bin=$(release_bin)
@@ -52,6 +52,20 @@ binaries "$work/macos-dynamic" "$work/macho-dynamic" ""
 check macos-arm64 "$work/macos-system" >/dev/null ||
     fail "a macOS tool that needs libSystem alone was refused"
 expect_refusal "/opt/dep/libdep.dylib" check macos-arm64 "$work/macos-dynamic"
+
+# macOS: dsymutil may name CoreFoundation, and any other tool that names it
+# is refused.
+printf '#include <CoreFoundation/CoreFoundation.h>\nint main(void) { return CFAbsoluteTimeGetCurrent() < 0; }\n' \
+    > "$work/uses-cf.c"
+"$clang" $macho -framework CoreFoundation -o "$work/macho-cf" "$work/uses-cf.c"
+binaries "$work/macos-cf-dsymutil" "$work/macho-system" ""
+cp "$work/macho-cf" "$work/macos-cf-dsymutil/dsymutil"
+check macos-arm64 "$work/macos-cf-dsymutil" >/dev/null ||
+    fail "a dsymutil that names CoreFoundation was refused"
+binaries "$work/macos-cf-objcopy" "$work/macho-system" ""
+cp "$work/macho-cf" "$work/macos-cf-objcopy/llvm-objcopy"
+# CMake wraps the line of the refusal before the path of the library.
+expect_refusal "llvm-objcopy of macos-arm64 needs" check macos-arm64 "$work/macos-cf-objcopy"
 
 # macOS: a tool built for a newer macOS than the deployment target refuses
 # to start on an older one, so its minos is refused.
