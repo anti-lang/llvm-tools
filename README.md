@@ -129,7 +129,8 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 | `build-llvm.cmake` | The recipe, which builds one host |
 | `checks/hello.ll` | The module that `opt` and `llc` compile for the six triples |
 | `checks/hello.proftext` | The profile of `hello.ll` that `llvm-profdata` merges and `opt` applies |
-| `checks/hello.c` | The program whose coverage `llvm-cov` reports |
+| `checks/hello.c` | The program whose coverage `llvm-cov` reports and whose dSYM `dsymutil` writes |
+| `checks/debug.ll` | The module with debug information whose objects `llvm-strip` strips |
 | `hosts.toml` | Per host: triple, build machine, sysroot kind, CMake options |
 | `pins/llvm-version` | The LLVM version |
 | `pins/source.sha256` | The SHA-256 digest of the LLVM source archive |
@@ -167,7 +168,12 @@ on the build machine also compile `checks/hello.ll` for the six triples, and its
 `checks/hello.proftext`, and its `opt` must apply that profile to `hello.ll`. The release
 clang compiles `checks/hello.c` with `-fprofile-instr-generate -fcoverage-mapping`, and
 the program runs. `llvm-profdata` of the host merges its profile, and `llvm-cov report`
-of the host must count the 14 lines of `hello.c`, 2 of them missed.
+of the host must count the 14 lines of `hello.c`, 2 of them missed. `llc` of the host
+compiles `checks/debug.ll` for the four ELF and Mach-O triples, and `llvm-strip
+--strip-debug` of the host must remove every debug section and keep the size and the
+bytes of every allocated section, as `llvm-objdump` of the host reads them. The release
+clang compiles `hello.c` with `-g` and links it with lld, and `dsymutil` of a macOS host
+must write its dSYM with the UUID of the program, `__debug_info` and `__debug_line`.
 
 Commit the recipe first, because `scripts/pack.sh` refuses a build of uncommitted files.
 Then build and publish:

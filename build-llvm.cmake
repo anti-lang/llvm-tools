@@ -16,7 +16,9 @@
 # another version. opt and llc of a host that runs on this machine compile
 # checks/hello.ll for the six triples, and opt applies the profile that its
 # llvm-profdata merges from checks/hello.proftext. Its llvm-cov reports the
-# coverage of a run of checks/hello.c, which the release clang compiles. It
+# coverage of a run of checks/hello.c, which the release clang compiles. Its
+# llvm-strip strips the debug sections of checks/debug.ll compiled by its
+# llc, and its dsymutil writes the dSYM of checks/hello.c linked with -g. It
 # then writes build/<host>/recipe, which scripts/pack.sh reads.
 #
 # STEP=builtins builds the compiler-rt builtins of the six targets, the
@@ -43,6 +45,12 @@
 #   check-coverage          compile checks/hello.c with the release clang,
 #                           run it, and report its coverage with
 #                           llvm-profdata and llvm-cov in BIN, into OUT
+#   check-strip             compile checks/debug.ll with llc in BIN for the
+#                           ELF and Mach-O triples, and strip its debug
+#                           sections with llvm-strip in BIN, into OUT
+#   check-dsym              link checks/hello.c with -g with the release
+#                           clang, and write its dSYM with dsymutil in BIN,
+#                           into OUT
 #   check-link-version      check the ld64 version that clang in BIN records
 #   check-builtins          check the compiler-rt runtimes in BUILTINS, the
 #                           lib directory of a resource directory
@@ -688,6 +696,216 @@ function(check_coverage bin dir)
                    "of them missed, from the profile that llvm-profdata merges")
 endfunction()
 
+# Set <names>, <debug> and <allocated> in the scope of the caller to the
+# sections of <object> that llvm-objdump in bin lists: every one, the debug
+# ones, and the allocated ones that are not debug sections. objdump marks an
+# allocated section TEXT, DATA or BSS and a debug section DEBUG, which a
+# Mach-O debug section carries beside DATA. <sizes> holds name=size of each.
+function(object_sections bin object names debug allocated sizes)
+    runs_here(here prefix)
+    run_or_stop("llvm-objdump --section-headers" ${prefix} "${bin}/llvm-objdump${exe}"
+                --section-headers "${object}")
+    string(REPLACE "\n" ";" lines "${out}")
+    set(all "")
+    set(debug_list "")
+    set(allocated_list "")
+    set(size_list "")
+    foreach(line IN LISTS lines)
+        if(NOT line MATCHES "^ *[0-9]+ ([^ ]+) +([0-9a-f]+) +[0-9a-f]+ ?(.*)$")
+            continue()
+        endif()
+        set(name "${CMAKE_MATCH_1}")
+        set(size "${CMAKE_MATCH_2}")
+        set(type "${CMAKE_MATCH_3}")
+        list(APPEND all "${name}")
+        list(APPEND size_list "${name}=${size}")
+        if(type MATCHES "DEBUG")
+            list(APPEND debug_list "${name}")
+        elseif(type MATCHES "TEXT|DATA|BSS")
+            list(APPEND allocated_list "${name}")
+        endif()
+    endforeach()
+    set(${names} "${all}" PARENT_SCOPE)
+    set(${debug} "${debug_list}" PARENT_SCOPE)
+    set(${allocated} "${allocated_list}" PARENT_SCOPE)
+    set(${sizes} "${size_list}" PARENT_SCOPE)
+endfunction()
+
+# Set <result> to the bytes of section <name> of <object> as llvm-objdump in
+# bin prints them, without the address of each line, which a section may
+# change when the sections before it go.
+function(section_bytes bin object name result)
+    runs_here(here prefix)
+    run_or_stop("llvm-objdump --full-contents" ${prefix} "${bin}/llvm-objdump${exe}"
+                --full-contents "--section=${name}" "${object}")
+    string(FIND "${out}" "Contents of section" at)
+    set(bytes "")
+    if(at GREATER_EQUAL 0)
+        string(SUBSTRING "${out}" ${at} -1 text)
+        string(REPLACE "\n" ";" lines "${text}")
+        list(POP_FRONT lines)
+        foreach(line IN LISTS lines)
+            string(REGEX REPLACE "^ *[0-9a-f]+ " "" line "${line}")
+            string(APPEND bytes "${line}\n")
+        endforeach()
+    endif()
+    set(${result} "${bytes}" PARENT_SCOPE)
+endfunction()
+
+# Refuse llvm-strip in bin unless llvm-strip --strip-debug removes every
+# debug section of an object that llc in bin writes from checks/debug.ll,
+# for each ELF and Mach-O triple of antic, and keeps every allocated section
+# with the bytes it had. llvm-objdump in bin reads both objects. Each
+# object and its stripped copy go into dir/<triple>.
+#
+# DESIGN: antic ships a release program that it linked once with -g and
+# then stripped, so the code that runs is the code that the debug
+# information describes. The check compares the bytes of the allocated
+# sections, the ones a loader maps, so a strip that changes them is refused.
+# An object without debug sections would pass for any llvm-strip, so llc
+# must write some. COFF is left out, since Windows keeps its debug
+# information in the PDB of the link.
+function(check_strip bin dir)
+    runs_here(here prefix)
+    if(NOT here)
+        message(FATAL_ERROR "the tools of ${HOST} do not run on ${machine}, and "
+                            "the strip check runs them here")
+    endif()
+    foreach(tool llc llvm-strip llvm-objdump)
+        if(NOT EXISTS "${bin}/${tool}${exe}")
+            message(FATAL_ERROR "${tool}${exe} is missing in ${bin}")
+        endif()
+    endforeach()
+    file(REMOVE_RECURSE "${dir}")
+    file(MAKE_DIRECTORY "${dir}")
+    foreach(row IN LISTS codegen_triples)
+        string(REPLACE "=" ";" row "${row}")
+        list(GET row 0 triple)
+        list(GET row 1 format)
+        if(NOT format MATCHES "^(elf|Mach-O)")
+            continue()
+        endif()
+        set(object "${dir}/${triple}/debug.o")
+        set(stripped "${dir}/${triple}/stripped.o")
+        file(MAKE_DIRECTORY "${dir}/${triple}")
+        run_or_stop("llc -mtriple=${triple}" ${prefix} "${bin}/llc${exe}" -O2
+                    -filetype=obj "-mtriple=${triple}" -o "${object}"
+                    "${root}/checks/debug.ll")
+        object_sections("${bin}" "${object}" names debug allocated sizes)
+        if(NOT debug)
+            message(FATAL_ERROR "llc writes no debug section for ${triple} from "
+                                "debug.ll on ${HOST}")
+        endif()
+        if(NOT allocated)
+            message(FATAL_ERROR "llc writes no allocated section for ${triple} "
+                                "from debug.ll on ${HOST}")
+        endif()
+        run_or_stop("llvm-strip --strip-debug" ${prefix} "${bin}/llvm-strip${exe}"
+                    --strip-debug -o "${stripped}" "${object}")
+        object_sections("${bin}" "${stripped}" stripped_names stripped_debug
+                        stripped_allocated stripped_sizes)
+        foreach(name IN LISTS stripped_debug)
+            message(FATAL_ERROR "llvm-strip --strip-debug keeps the debug section "
+                                "${name} for ${triple} on ${HOST}")
+        endforeach()
+        foreach(name IN LISTS allocated)
+            if(NOT name IN_LIST stripped_allocated)
+                message(FATAL_ERROR "llvm-strip --strip-debug drops the section "
+                                    "${name} for ${triple} on ${HOST}")
+            endif()
+            # A section of BSS has a size and no bytes, so the sizes count too.
+            foreach(which sizes stripped_sizes)
+                set(${which}_of "")
+                foreach(entry IN LISTS ${which})
+                    if(entry MATCHES "^(.*)=([0-9a-f]+)$" AND CMAKE_MATCH_1 STREQUAL name)
+                        set(${which}_of "${CMAKE_MATCH_2}")
+                    endif()
+                endforeach()
+            endforeach()
+            if(NOT sizes_of STREQUAL stripped_sizes_of)
+                message(FATAL_ERROR "llvm-strip --strip-debug changes the size of "
+                                    "${name} for ${triple} on ${HOST}")
+            endif()
+            section_bytes("${bin}" "${object}" "${name}" before)
+            section_bytes("${bin}" "${stripped}" "${name}" after)
+            if(NOT before STREQUAL after)
+                message(FATAL_ERROR "llvm-strip --strip-debug changes the bytes of "
+                                    "${name} for ${triple} on ${HOST}")
+            endif()
+        endforeach()
+        list(LENGTH debug debug_count)
+        list(LENGTH allocated allocated_count)
+        message(STATUS "debug.o for ${triple}: llvm-strip --strip-debug removes "
+                       "${debug_count} debug sections and keeps the bytes of "
+                       "${allocated_count} allocated sections")
+    endforeach()
+endfunction()
+
+# Refuse dsymutil in bin unless it writes the dSYM of a macOS program that
+# the release clang compiles from checks/hello.c with -g and links with
+# lld. The DWARF file of the dSYM must name the UUID of the program and hold
+# its __debug_info and __debug_line, which llvm-objdump in bin reads. The
+# object, the program and the dSYM go into dir.
+#
+# DESIGN: dsymutil reads the debug information from the object that the
+# program's debug map names, so the object is compiled apart and stays in
+# dir. As in the coverage check, the program is one of this machine and the
+# tools are those of a host that runs here.
+function(check_dsym bin dir)
+    runs_here(here prefix)
+    if(NOT here)
+        message(FATAL_ERROR "the tools of ${HOST} do not run on ${machine}, and "
+                            "the dSYM check runs them here")
+    endif()
+    if(NOT os STREQUAL "macos")
+        message(FATAL_ERROR "the dSYM check links hello.c against the macOS SDK, "
+                            "and ${HOST} has none")
+    endif()
+    foreach(tool dsymutil llvm-objdump)
+        if(NOT EXISTS "${bin}/${tool}${exe}")
+            message(FATAL_ERROR "${tool}${exe} is missing in ${bin}")
+        endif()
+    endforeach()
+    file(REMOVE_RECURSE "${dir}")
+    file(MAKE_DIRECTORY "${dir}")
+    set(object "${dir}/hello.o")
+    set(program "${dir}/hello")
+    set(dsym "${dir}/hello.dSYM")
+    set(dwarf "${dsym}/Contents/Resources/DWARF/hello")
+    run_or_stop("clang -g -c" "${release_bin}/clang${machine_exe}" -isysroot
+                "${sysroot}" -g -c -o "${object}" "${root}/checks/hello.c")
+    run_or_stop("the link of hello" "${release_bin}/clang${machine_exe}" -isysroot
+                "${sysroot}" -fuse-ld=lld -o "${program}" "${object}")
+    run_or_stop("dsymutil" ${prefix} "${bin}/dsymutil${exe}" "${program}" -o "${dsym}")
+    if(NOT EXISTS "${dwarf}")
+        message(FATAL_ERROR "dsymutil writes no DWARF file ${dwarf} on ${HOST}")
+    endif()
+    object_sections("${bin}" "${dwarf}" names debug allocated sizes)
+    foreach(name __debug_info __debug_line)
+        if(NOT name IN_LIST debug)
+            message(FATAL_ERROR "the dSYM that dsymutil writes on ${HOST} holds no "
+                                "${name}")
+        endif()
+    endforeach()
+    set(uuids "")
+    foreach(file "${program}" "${dwarf}")
+        run_or_stop("llvm-objdump --private-headers" ${prefix}
+                    "${bin}/llvm-objdump${exe}" --macho --private-headers "${file}")
+        if(NOT out MATCHES "cmd LC_UUID\n[^\n]*\n *uuid ([0-9A-Fa-f-]+)")
+            message(FATAL_ERROR "${file} names no UUID")
+        endif()
+        list(APPEND uuids "${CMAKE_MATCH_1}")
+    endforeach()
+    list(GET uuids 0 program_uuid)
+    list(GET uuids 1 dsym_uuid)
+    if(NOT program_uuid STREQUAL dsym_uuid)
+        message(FATAL_ERROR "the dSYM that dsymutil writes on ${HOST} names the "
+                            "UUID ${dsym_uuid}, and hello has ${program_uuid}")
+    endif()
+    message(STATUS "dsymutil writes the dSYM of hello, with its UUID "
+                   "${program_uuid} and its debug sections")
+endfunction()
+
 # Refuse a clang in bin that records another ld64 version than
 # darwin_link_version, or none. clang -### shows the version it records as
 # -target-linker-version of its cc1 line.
@@ -737,6 +955,18 @@ elseif(STEP STREQUAL "check-coverage")
         set(OUT "${work}/coverage")
     endif()
     check_coverage("${BIN}" "${OUT}")
+    return()
+elseif(STEP STREQUAL "check-strip")
+    if(NOT DEFINED OUT)
+        set(OUT "${work}/strip")
+    endif()
+    check_strip("${BIN}" "${OUT}")
+    return()
+elseif(STEP STREQUAL "check-dsym")
+    if(NOT DEFINED OUT)
+        set(OUT "${work}/dsym")
+    endif()
+    check_dsym("${BIN}" "${OUT}")
     return()
 elseif(NOT STEP MATCHES "^(all|builtins|check-builtins|check-unwind|check-profile|glibc-sysroot)$")
     message(FATAL_ERROR "STEP is '${STEP}', which the recipe does not know")
@@ -1829,10 +2059,12 @@ runs_here(here prefix)
 if(here)
     check_codegen("${tools_bin}" "${work}/codegen")
     check_coverage("${tools_bin}" "${work}/coverage")
+    check_strip("${tools_bin}" "${work}/strip")
+    check_dsym("${tools_bin}" "${work}/dsym")
 else()
-    message(STATUS "the codegen and coverage checks run the tools of a host "
-                   "that runs on ${machine}, and those of ${HOST} run on "
-                   "another machine")
+    message(STATUS "the codegen, coverage, strip and dSYM checks run the tools "
+                   "of a host that runs on ${machine}, and those of ${HOST} run "
+                   "on another machine")
 endif()
 write_stamp("${stamp}")
 message(STATUS "${tools_bin} holds the tools and clang of LLVM ${version} for ${HOST}")
